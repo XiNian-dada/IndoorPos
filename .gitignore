@@ -1,0 +1,11 @@
+.DS_Store
+.idea/
+.venv/
+__pycache__/
+*.pyc
+
+analysis_outputs/
+runs/
+archive/
+training_dataset/
+test_dataset/
