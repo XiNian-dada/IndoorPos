@@ -9,7 +9,7 @@ import json
 import math
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import matplotlib
 
@@ -46,7 +46,7 @@ def load_npz(path: Path) -> Dict[str, np.ndarray]:
         return {key: data[key] for key in data.files}
 
 
-def load_metadata(path: Path) -> Dict[str, object] | None:
+def load_metadata(path: Path) -> Optional[Dict[str, object]]:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -75,7 +75,10 @@ def concat_splits(split_dicts: Iterable[Dict[str, np.ndarray]]) -> Dict[str, np.
     }
 
 
-def validate_selected_waps(train_meta: Dict[str, object] | None, test_meta: Dict[str, object] | None) -> None:
+def validate_selected_waps(
+    train_meta: Optional[Dict[str, object]],
+    test_meta: Optional[Dict[str, object]],
+) -> None:
     if not train_meta or not test_meta:
         return
 
@@ -150,6 +153,8 @@ class FixedSequenceDataset(Dataset):
         coord_mean: np.ndarray,
         coord_std: np.ndarray,
         group_to_class: Dict[Tuple[int, int], int],
+        group_coord_mean: np.ndarray,
+        group_coord_std: np.ndarray,
     ) -> None:
         self.x = zscore(
             arrays["X"].astype(np.float32),
@@ -180,6 +185,13 @@ class FixedSequenceDataset(Dataset):
             [group_to_class[(int(b), int(f))] for b, f in self.groups],
             dtype=np.int64,
         )
+        self.group_coord_mean = group_coord_mean.astype(np.float32)
+        self.group_coord_std = group_coord_std.astype(np.float32)
+        self.y_last_local_norm = zscore(
+            self.y_last_raw,
+            self.group_coord_mean[self.group_ids],
+            self.group_coord_std[self.group_ids],
+        ).astype(np.float32)
 
     def __len__(self) -> int:
         return len(self.x)
@@ -190,6 +202,7 @@ class FixedSequenceDataset(Dataset):
             "motion_x": torch.from_numpy(self.motion_x[idx]),
             "coords_norm": torch.from_numpy(self.coords_norm[idx]),
             "y_last_norm": torch.from_numpy(self.y_last_norm[idx]),
+            "y_last_local_norm": torch.from_numpy(self.y_last_local_norm[idx]),
             "y_last_raw": torch.from_numpy(self.y_last_raw[idx]),
             "group_id": torch.tensor(self.group_ids[idx], dtype=torch.long),
         }
@@ -436,12 +449,14 @@ class HybridCNNTCN(nn.Module):
         )
 
         fusion_dim = tcn_hidden_dim * 2
-        self.coord_head = nn.Sequential(
+        self.coord_backbone = nn.Sequential(
             nn.LayerNorm(fusion_dim),
             nn.Linear(fusion_dim, tcn_hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(tcn_hidden_dim, 2),
+        )
+        self.coord_experts = nn.ModuleList(
+            [nn.Linear(tcn_hidden_dim, 2) for _ in range(num_classes)]
         )
         self.cls_head = nn.Sequential(
             nn.LayerNorm(fusion_dim),
@@ -457,7 +472,12 @@ class HybridCNNTCN(nn.Module):
             nn.Conv1d(tcn_hidden_dim, 2, kernel_size=1),
         )
 
-    def forward(self, x: torch.Tensor, motion_x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        motion_x: torch.Tensor,
+        group_ids: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
         rssi_features = self.fingerprint_encoder(x)
         motion_features = self.motion_encoder(motion_x)
         fused_step_features = torch.cat([rssi_features, motion_features], dim=-1)
@@ -469,12 +489,25 @@ class HybridCNNTCN(nn.Module):
         mean_state = temporal_seq.mean(dim=1)
         fused = torch.cat([last_state, mean_state], dim=-1)
 
-        pred_coord = self.coord_head(fused)
         logits = self.cls_head(fused)
+        coord_hidden = self.coord_backbone(fused)
+        coord_candidates = torch.stack(
+            [expert(coord_hidden) for expert in self.coord_experts],
+            dim=1,
+        )
+        if group_ids is not None:
+            pred_coord = coord_candidates[
+                torch.arange(coord_candidates.size(0), device=coord_candidates.device),
+                group_ids,
+            ]
+        else:
+            probs = torch.softmax(logits, dim=1)
+            pred_coord = torch.sum(coord_candidates * probs.unsqueeze(-1), dim=1)
         pred_traj = self.traj_head(temporal_features).transpose(1, 2).contiguous()
 
         return {
             "pred_coord": pred_coord,
+            "pred_coord_candidates": coord_candidates,
             "pred_traj": pred_traj,
             "logits": logits,
         }
@@ -484,7 +517,7 @@ class EarlyStopping:
     def __init__(self, patience: int, min_delta: float = 0.0) -> None:
         self.patience = patience
         self.min_delta = min_delta
-        self.best_value: float | None = None
+        self.best_value: Optional[float] = None
         self.counter = 0
 
     def step(self, value: float) -> bool:
@@ -508,6 +541,30 @@ def build_group_mapping(*group_arrays: np.ndarray) -> Tuple[Dict[Tuple[int, int]
     group_to_class = {group: idx for idx, group in enumerate(unique_groups)}
     class_names = [f"B{building}_F{floor}" for building, floor in unique_groups]
     return group_to_class, class_names
+
+
+def build_group_coord_stats(
+    train_groups: np.ndarray,
+    train_y_last: np.ndarray,
+    group_to_class: Dict[Tuple[int, int], int],
+) -> Tuple[np.ndarray, np.ndarray]:
+    num_classes = len(group_to_class)
+    group_coord_mean = np.zeros((num_classes, 2), dtype=np.float32)
+    group_coord_std = np.ones((num_classes, 2), dtype=np.float32)
+
+    for group_key, class_id in group_to_class.items():
+        mask = (
+            (train_groups[:, 0] == group_key[0]) &
+            (train_groups[:, 1] == group_key[1])
+        )
+        coords = train_y_last[mask]
+        if len(coords) == 0:
+            continue
+        group_coord_mean[class_id] = coords.mean(axis=0).astype(np.float32)
+        std = coords.std(axis=0).astype(np.float32)
+        group_coord_std[class_id] = np.where(std < 1e-6, 1.0, std).astype(np.float32)
+
+    return group_coord_mean, group_coord_std
 
 
 def build_dataloaders(
@@ -535,6 +592,11 @@ def build_dataloaders(
         val_arrays["group"],
         test_arrays["group"],
     )
+    group_coord_mean, group_coord_std = build_group_coord_stats(
+        train_groups=train_arrays["group"],
+        train_y_last=train_arrays["y_last"],
+        group_to_class=group_to_class,
+    )
 
     stats = {
         "feature_mean": feature_mean,
@@ -543,6 +605,8 @@ def build_dataloaders(
         "motion_std": motion_std,
         "coord_mean": coord_mean,
         "coord_std": coord_std,
+        "group_coord_mean": group_coord_mean,
+        "group_coord_std": group_coord_std,
     }
 
     train_dataset = FixedSequenceDataset(
@@ -554,6 +618,8 @@ def build_dataloaders(
         coord_mean=coord_mean,
         coord_std=coord_std,
         group_to_class=group_to_class,
+        group_coord_mean=group_coord_mean,
+        group_coord_std=group_coord_std,
     )
     val_dataset = FixedSequenceDataset(
         val_arrays,
@@ -564,6 +630,8 @@ def build_dataloaders(
         coord_mean=coord_mean,
         coord_std=coord_std,
         group_to_class=group_to_class,
+        group_coord_mean=group_coord_mean,
+        group_coord_std=group_coord_std,
     )
     test_dataset = FixedSequenceDataset(
         test_arrays,
@@ -574,6 +642,8 @@ def build_dataloaders(
         coord_mean=coord_mean,
         coord_std=coord_std,
         group_to_class=group_to_class,
+        group_coord_mean=group_coord_mean,
+        group_coord_std=group_coord_std,
     )
 
     train_loader = DataLoader(
@@ -616,6 +686,8 @@ def build_test_loader_from_stats(
         coord_mean=stats["coord_mean"],
         coord_std=stats["coord_std"],
         group_to_class=group_to_class,
+        group_coord_mean=stats["group_coord_mean"],
+        group_coord_std=stats["group_coord_std"],
     )
     return DataLoader(
         test_dataset,
@@ -642,7 +714,7 @@ def compute_loss(
     cls_weight: float,
     cls_loss_fn: nn.Module,
 ) -> Dict[str, torch.Tensor]:
-    coord_loss = nn.functional.smooth_l1_loss(outputs["pred_coord"], batch["y_last_norm"])
+    coord_loss = nn.functional.smooth_l1_loss(outputs["pred_coord"], batch["y_last_local_norm"])
     traj_loss = nn.functional.smooth_l1_loss(outputs["pred_traj"], batch["coords_norm"])
     cls_loss = cls_loss_fn(outputs["logits"], batch["group_id"])
     total_loss = coord_weight * coord_loss + traj_weight * traj_loss + cls_weight * cls_loss
@@ -675,6 +747,8 @@ def evaluate(
     device: torch.device,
     coord_mean: np.ndarray,
     coord_std: np.ndarray,
+    group_coord_mean: np.ndarray,
+    group_coord_std: np.ndarray,
     coord_weight: float,
     traj_weight: float,
     cls_weight: float,
@@ -695,12 +769,14 @@ def evaluate(
 
     coord_mean_t = torch.from_numpy(coord_mean).to(device)
     coord_std_t = torch.from_numpy(coord_std).to(device)
+    group_coord_mean_t = torch.from_numpy(group_coord_mean).to(device)
+    group_coord_std_t = torch.from_numpy(group_coord_std).to(device)
 
     with torch.no_grad():
         iterator = wrap_loader(loader, enabled=show_progress, desc=desc)
         for batch in iterator:
             batch = batch_to_device(batch, device)
-            outputs = model(batch["x"], batch["motion_x"])
+            outputs = model(batch["x"], batch["motion_x"], batch["group_id"])
             loss_dict = compute_loss(
                 outputs,
                 batch,
@@ -714,10 +790,17 @@ def evaluate(
                 losses[key] += float(loss_dict[key].item())
             num_batches += 1
 
-            pred_coord_raw = outputs["pred_coord"] * coord_std_t + coord_mean_t
-            error = torch.linalg.norm(pred_coord_raw - batch["y_last_raw"], dim=1)
-
             pred_ids = outputs["logits"].argmax(dim=1)
+            pred_coord_candidates_raw = (
+                outputs["pred_coord_candidates"] *
+                group_coord_std_t.unsqueeze(0) +
+                group_coord_mean_t.unsqueeze(0)
+            )
+            pred_coord_raw = pred_coord_candidates_raw[
+                torch.arange(pred_coord_candidates_raw.size(0), device=device),
+                pred_ids,
+            ]
+            error = torch.linalg.norm(pred_coord_raw - batch["y_last_raw"], dim=1)
 
             all_errors.append(error.detach().cpu().numpy())
             all_targets.append(batch["y_last_raw"].detach().cpu().numpy())
@@ -776,7 +859,7 @@ def train_one_epoch(
         batch = batch_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
 
-        outputs = model(batch["x"], batch["motion_x"])
+        outputs = model(batch["x"], batch["motion_x"], batch["group_id"])
         loss_dict = compute_loss(
             outputs,
             batch,
@@ -930,6 +1013,8 @@ def main() -> None:
             device=device,
             coord_mean=stats["coord_mean"],
             coord_std=stats["coord_std"],
+            group_coord_mean=stats["group_coord_mean"],
+            group_coord_std=stats["group_coord_std"],
             coord_weight=args.coord_loss_weight,
             traj_weight=args.traj_loss_weight,
             cls_weight=args.cls_loss_weight,
@@ -1053,6 +1138,8 @@ def main() -> None:
             device=device,
             coord_mean=stats["coord_mean"],
             coord_std=stats["coord_std"],
+            group_coord_mean=stats["group_coord_mean"],
+            group_coord_std=stats["group_coord_std"],
             coord_weight=args.coord_loss_weight,
             traj_weight=args.traj_loss_weight,
             cls_weight=args.cls_loss_weight,
@@ -1121,6 +1208,8 @@ def main() -> None:
         device=device,
         coord_mean=stats["coord_mean"],
         coord_std=stats["coord_std"],
+        group_coord_mean=stats["group_coord_mean"],
+        group_coord_std=stats["group_coord_std"],
         coord_weight=args.coord_loss_weight,
         traj_weight=args.traj_loss_weight,
         cls_weight=args.cls_loss_weight,
