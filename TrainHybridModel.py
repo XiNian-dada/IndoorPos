@@ -9,7 +9,7 @@ import json
 import math
 import random
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import matplotlib
 
@@ -18,7 +18,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
+from sklearn.cluster import KMeans
 from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
+from sklearn.neighbors import NearestNeighbors
 from torch.utils.data import DataLoader, Dataset
 
 try:
@@ -46,7 +48,7 @@ def load_npz(path: Path) -> Dict[str, np.ndarray]:
         return {key: data[key] for key in data.files}
 
 
-def load_metadata(path: Path) -> Dict[str, object] | None:
+def load_metadata(path: Path) -> Optional[Dict[str, object]]:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -75,7 +77,10 @@ def concat_splits(split_dicts: Iterable[Dict[str, np.ndarray]]) -> Dict[str, np.
     }
 
 
-def validate_selected_waps(train_meta: Dict[str, object] | None, test_meta: Dict[str, object] | None) -> None:
+def validate_selected_waps(
+    train_meta: Optional[Dict[str, object]],
+    test_meta: Optional[Dict[str, object]],
+) -> None:
     if not train_meta or not test_meta:
         return
 
@@ -150,6 +155,11 @@ class FixedSequenceDataset(Dataset):
         coord_mean: np.ndarray,
         coord_std: np.ndarray,
         group_to_class: Dict[Tuple[int, int], int],
+        group_coord_mean: np.ndarray,
+        group_coord_std: np.ndarray,
+        anchor_centers_raw: np.ndarray,
+        anchor_centers_norm: np.ndarray,
+        anchor_group_ids: np.ndarray,
     ) -> None:
         self.x = zscore(
             arrays["X"].astype(np.float32),
@@ -180,6 +190,23 @@ class FixedSequenceDataset(Dataset):
             [group_to_class[(int(b), int(f))] for b, f in self.groups],
             dtype=np.int64,
         )
+        self.group_coord_mean = group_coord_mean.astype(np.float32)
+        self.group_coord_std = group_coord_std.astype(np.float32)
+        self.y_last_local_norm = zscore(
+            self.y_last_raw,
+            self.group_coord_mean[self.group_ids],
+            self.group_coord_std[self.group_ids],
+        ).astype(np.float32)
+        self.anchor_ids = assign_anchor_ids(
+            coords_raw=self.y_last_raw,
+            group_ids=self.group_ids,
+            anchor_centers_raw=anchor_centers_raw,
+            anchor_group_ids=anchor_group_ids,
+        )
+        self.anchor_centers_norm = anchor_centers_norm.astype(np.float32)
+        self.anchor_offset_norm = (
+            self.y_last_norm - self.anchor_centers_norm[self.anchor_ids]
+        ).astype(np.float32)
 
     def __len__(self) -> int:
         return len(self.x)
@@ -190,7 +217,10 @@ class FixedSequenceDataset(Dataset):
             "motion_x": torch.from_numpy(self.motion_x[idx]),
             "coords_norm": torch.from_numpy(self.coords_norm[idx]),
             "y_last_norm": torch.from_numpy(self.y_last_norm[idx]),
+            "y_last_local_norm": torch.from_numpy(self.y_last_local_norm[idx]),
+            "anchor_offset_norm": torch.from_numpy(self.anchor_offset_norm[idx]),
             "y_last_raw": torch.from_numpy(self.y_last_raw[idx]),
+            "anchor_id": torch.tensor(self.anchor_ids[idx], dtype=torch.long),
             "group_id": torch.tensor(self.group_ids[idx], dtype=torch.long),
         }
 
@@ -412,7 +442,10 @@ class HybridCNNTCN(nn.Module):
     def __init__(
         self,
         num_classes: int,
+        num_anchors: int,
         motion_input_dim: int,
+        anchor_centers_norm: np.ndarray,
+        anchor_group_ids: np.ndarray,
         dropout: float = 0.1,
         cnn_channels: Tuple[int, int, int] = (32, 64, 128),
         motion_hidden_dim: int = 64,
@@ -436,12 +469,11 @@ class HybridCNNTCN(nn.Module):
         )
 
         fusion_dim = tcn_hidden_dim * 2
-        self.coord_head = nn.Sequential(
+        self.coord_backbone = nn.Sequential(
             nn.LayerNorm(fusion_dim),
             nn.Linear(fusion_dim, tcn_hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(tcn_hidden_dim, 2),
         )
         self.cls_head = nn.Sequential(
             nn.LayerNorm(fusion_dim),
@@ -450,14 +482,41 @@ class HybridCNNTCN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(tcn_hidden_dim, num_classes),
         )
+        self.anchor_head = nn.Sequential(
+            nn.LayerNorm(fusion_dim),
+            nn.Linear(fusion_dim, tcn_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(tcn_hidden_dim, num_anchors),
+        )
+        self.residual_head = nn.Sequential(
+            nn.LayerNorm(tcn_hidden_dim),
+            nn.Linear(tcn_hidden_dim, tcn_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(tcn_hidden_dim, 2),
+        )
         self.traj_head = nn.Sequential(
             nn.Conv1d(tcn_hidden_dim, tcn_hidden_dim, kernel_size=1),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Conv1d(tcn_hidden_dim, 2, kernel_size=1),
         )
+        self.register_buffer(
+            "anchor_centers_norm",
+            torch.from_numpy(anchor_centers_norm.astype(np.float32)),
+        )
+        self.register_buffer(
+            "anchor_group_ids",
+            torch.from_numpy(anchor_group_ids.astype(np.int64)),
+        )
 
-    def forward(self, x: torch.Tensor, motion_x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        motion_x: torch.Tensor,
+        group_ids: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
         rssi_features = self.fingerprint_encoder(x)
         motion_features = self.motion_encoder(motion_x)
         fused_step_features = torch.cat([rssi_features, motion_features], dim=-1)
@@ -469,14 +528,30 @@ class HybridCNNTCN(nn.Module):
         mean_state = temporal_seq.mean(dim=1)
         fused = torch.cat([last_state, mean_state], dim=-1)
 
-        pred_coord = self.coord_head(fused)
+        coord_hidden = self.coord_backbone(fused)
         logits = self.cls_head(fused)
+        raw_anchor_logits = self.anchor_head(fused)
+        residual = self.residual_head(coord_hidden)
+
+        if group_ids is not None:
+            valid_anchor_mask = self.anchor_group_ids.unsqueeze(0) == group_ids.unsqueeze(1)
+            masked_anchor_logits = raw_anchor_logits.masked_fill(~valid_anchor_mask, -1e9)
+        else:
+            group_prior = torch.softmax(logits, dim=1)
+            anchor_group_prior = group_prior[:, self.anchor_group_ids].clamp_min(1e-8)
+            masked_anchor_logits = raw_anchor_logits + torch.log(anchor_group_prior)
+        anchor_probs = torch.softmax(masked_anchor_logits, dim=1)
+        pred_anchor_coord = torch.matmul(anchor_probs, self.anchor_centers_norm)
+        pred_coord = pred_anchor_coord + residual
         pred_traj = self.traj_head(temporal_features).transpose(1, 2).contiguous()
 
         return {
             "pred_coord": pred_coord,
+            "pred_anchor_coord": pred_anchor_coord,
+            "pred_residual": residual,
             "pred_traj": pred_traj,
             "logits": logits,
+            "anchor_logits": masked_anchor_logits,
         }
 
 
@@ -484,7 +559,7 @@ class EarlyStopping:
     def __init__(self, patience: int, min_delta: float = 0.0) -> None:
         self.patience = patience
         self.min_delta = min_delta
-        self.best_value: float | None = None
+        self.best_value: Optional[float] = None
         self.counter = 0
 
     def step(self, value: float) -> bool:
@@ -510,12 +585,120 @@ def build_group_mapping(*group_arrays: np.ndarray) -> Tuple[Dict[Tuple[int, int]
     return group_to_class, class_names
 
 
+def build_group_coord_stats(
+    train_groups: np.ndarray,
+    train_y_last: np.ndarray,
+    group_to_class: Dict[Tuple[int, int], int],
+) -> Tuple[np.ndarray, np.ndarray]:
+    num_classes = len(group_to_class)
+    group_coord_mean = np.zeros((num_classes, 2), dtype=np.float32)
+    group_coord_std = np.ones((num_classes, 2), dtype=np.float32)
+
+    for group_key, class_id in group_to_class.items():
+        mask = (
+            (train_groups[:, 0] == group_key[0]) &
+            (train_groups[:, 1] == group_key[1])
+        )
+        coords = train_y_last[mask]
+        if len(coords) == 0:
+            continue
+        group_coord_mean[class_id] = coords.mean(axis=0).astype(np.float32)
+        std = coords.std(axis=0).astype(np.float32)
+        group_coord_std[class_id] = np.where(std < 1e-6, 1.0, std).astype(np.float32)
+
+    return group_coord_mean, group_coord_std
+
+
+def build_anchor_bank(
+    train_groups: np.ndarray,
+    train_y_last: np.ndarray,
+    group_to_class: Dict[Tuple[int, int], int],
+    coord_mean: np.ndarray,
+    coord_std: np.ndarray,
+    anchor_divisor: int,
+    min_anchors_per_group: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    anchor_centers_raw_list: List[np.ndarray] = []
+    anchor_group_ids_list: List[int] = []
+
+    for group_key, class_id in sorted(group_to_class.items(), key=lambda item: item[1]):
+        mask = (
+            (train_groups[:, 0] == group_key[0]) &
+            (train_groups[:, 1] == group_key[1])
+        )
+        coords = train_y_last[mask].astype(np.float32)
+        if len(coords) == 0:
+            continue
+
+        unique_coords = np.unique(np.round(coords, 3), axis=0)
+        num_anchors = max(int(min_anchors_per_group), len(unique_coords) // max(1, int(anchor_divisor)))
+        num_anchors = min(max(1, num_anchors), len(unique_coords))
+
+        if num_anchors >= len(unique_coords):
+            centers = unique_coords.astype(np.float32)
+        else:
+            kmeans = KMeans(
+                n_clusters=num_anchors,
+                random_state=42,
+                n_init=10,
+            )
+            kmeans.fit(coords)
+            centers = kmeans.cluster_centers_.astype(np.float32)
+
+        anchor_centers_raw_list.append(centers)
+        anchor_group_ids_list.extend([int(class_id)] * len(centers))
+
+    anchor_centers_raw = np.concatenate(anchor_centers_raw_list, axis=0).astype(np.float32)
+    anchor_group_ids = np.asarray(anchor_group_ids_list, dtype=np.int64)
+    anchor_centers_norm = zscore(
+        anchor_centers_raw,
+        coord_mean[None, :],
+        coord_std[None, :],
+    ).astype(np.float32)
+
+    return anchor_centers_raw, anchor_centers_norm, anchor_group_ids
+
+
+def assign_anchor_ids(
+    coords_raw: np.ndarray,
+    group_ids: np.ndarray,
+    anchor_centers_raw: np.ndarray,
+    anchor_group_ids: np.ndarray,
+) -> np.ndarray:
+    anchor_ids = np.full(len(coords_raw), -1, dtype=np.int64)
+
+    for group_id in sorted(set(int(x) for x in group_ids.tolist())):
+        sample_mask = group_ids == group_id
+        group_anchor_indices = np.where(anchor_group_ids == group_id)[0]
+        if sample_mask.sum() == 0:
+            continue
+
+        if len(group_anchor_indices) == 0:
+            neighbors = NearestNeighbors(n_neighbors=1, metric="euclidean")
+            neighbors.fit(anchor_centers_raw)
+            _, global_indices = neighbors.kneighbors(coords_raw[sample_mask])
+            anchor_ids[sample_mask] = global_indices[:, 0]
+            continue
+
+        neighbors = NearestNeighbors(n_neighbors=1, metric="euclidean")
+        neighbors.fit(anchor_centers_raw[group_anchor_indices])
+        _, local_indices = neighbors.kneighbors(coords_raw[sample_mask])
+        anchor_ids[sample_mask] = group_anchor_indices[local_indices[:, 0]]
+
+    if np.any(anchor_ids < 0):
+        raise ValueError("Failed to assign anchor ids for some samples.")
+
+    return anchor_ids
+
+
 def build_dataloaders(
     train_arrays: Dict[str, np.ndarray],
     val_arrays: Dict[str, np.ndarray],
     test_arrays: Dict[str, np.ndarray],
     batch_size: int,
     num_workers: int,
+    anchor_divisor: int,
+    min_anchors_per_group: int,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, Dict[str, np.ndarray], Dict[Tuple[int, int], int], List[str]]:
     feature_mean = train_arrays["X"].mean(axis=(0, 1)).astype(np.float32)
     feature_std = train_arrays["X"].std(axis=(0, 1)).astype(np.float32)
@@ -535,6 +718,20 @@ def build_dataloaders(
         val_arrays["group"],
         test_arrays["group"],
     )
+    group_coord_mean, group_coord_std = build_group_coord_stats(
+        train_groups=train_arrays["group"],
+        train_y_last=train_arrays["y_last"],
+        group_to_class=group_to_class,
+    )
+    anchor_centers_raw, anchor_centers_norm, anchor_group_ids = build_anchor_bank(
+        train_groups=train_arrays["group"],
+        train_y_last=train_arrays["y_last"],
+        group_to_class=group_to_class,
+        coord_mean=coord_mean,
+        coord_std=coord_std,
+        anchor_divisor=anchor_divisor,
+        min_anchors_per_group=min_anchors_per_group,
+    )
 
     stats = {
         "feature_mean": feature_mean,
@@ -543,6 +740,11 @@ def build_dataloaders(
         "motion_std": motion_std,
         "coord_mean": coord_mean,
         "coord_std": coord_std,
+        "group_coord_mean": group_coord_mean,
+        "group_coord_std": group_coord_std,
+        "anchor_centers_raw": anchor_centers_raw,
+        "anchor_centers_norm": anchor_centers_norm,
+        "anchor_group_ids": anchor_group_ids,
     }
 
     train_dataset = FixedSequenceDataset(
@@ -554,6 +756,11 @@ def build_dataloaders(
         coord_mean=coord_mean,
         coord_std=coord_std,
         group_to_class=group_to_class,
+        group_coord_mean=group_coord_mean,
+        group_coord_std=group_coord_std,
+        anchor_centers_raw=anchor_centers_raw,
+        anchor_centers_norm=anchor_centers_norm,
+        anchor_group_ids=anchor_group_ids,
     )
     val_dataset = FixedSequenceDataset(
         val_arrays,
@@ -564,6 +771,11 @@ def build_dataloaders(
         coord_mean=coord_mean,
         coord_std=coord_std,
         group_to_class=group_to_class,
+        group_coord_mean=group_coord_mean,
+        group_coord_std=group_coord_std,
+        anchor_centers_raw=anchor_centers_raw,
+        anchor_centers_norm=anchor_centers_norm,
+        anchor_group_ids=anchor_group_ids,
     )
     test_dataset = FixedSequenceDataset(
         test_arrays,
@@ -574,6 +786,11 @@ def build_dataloaders(
         coord_mean=coord_mean,
         coord_std=coord_std,
         group_to_class=group_to_class,
+        group_coord_mean=group_coord_mean,
+        group_coord_std=group_coord_std,
+        anchor_centers_raw=anchor_centers_raw,
+        anchor_centers_norm=anchor_centers_norm,
+        anchor_group_ids=anchor_group_ids,
     )
 
     train_loader = DataLoader(
@@ -616,6 +833,11 @@ def build_test_loader_from_stats(
         coord_mean=stats["coord_mean"],
         coord_std=stats["coord_std"],
         group_to_class=group_to_class,
+        group_coord_mean=stats["group_coord_mean"],
+        group_coord_std=stats["group_coord_std"],
+        anchor_centers_raw=stats["anchor_centers_raw"],
+        anchor_centers_norm=stats["anchor_centers_norm"],
+        anchor_group_ids=stats["anchor_group_ids"],
     )
     return DataLoader(
         test_dataset,
@@ -640,18 +862,34 @@ def compute_loss(
     coord_weight: float,
     traj_weight: float,
     cls_weight: float,
+    anchor_weight: float,
+    residual_weight: float,
     cls_loss_fn: nn.Module,
+    anchor_loss_fn: nn.Module,
 ) -> Dict[str, torch.Tensor]:
     coord_loss = nn.functional.smooth_l1_loss(outputs["pred_coord"], batch["y_last_norm"])
     traj_loss = nn.functional.smooth_l1_loss(outputs["pred_traj"], batch["coords_norm"])
     cls_loss = cls_loss_fn(outputs["logits"], batch["group_id"])
-    total_loss = coord_weight * coord_loss + traj_weight * traj_loss + cls_weight * cls_loss
+    anchor_loss = anchor_loss_fn(outputs["anchor_logits"], batch["anchor_id"])
+    residual_loss = nn.functional.smooth_l1_loss(
+        outputs["pred_residual"],
+        batch["anchor_offset_norm"],
+    )
+    total_loss = (
+        coord_weight * coord_loss +
+        traj_weight * traj_loss +
+        cls_weight * cls_loss +
+        anchor_weight * anchor_loss +
+        residual_weight * residual_loss
+    )
 
     return {
         "total": total_loss,
         "coord": coord_loss,
         "traj": traj_loss,
         "cls": cls_loss,
+        "anchor": anchor_loss,
+        "residual": residual_loss,
     }
 
 
@@ -678,13 +916,16 @@ def evaluate(
     coord_weight: float,
     traj_weight: float,
     cls_weight: float,
+    anchor_weight: float,
+    residual_weight: float,
     cls_loss_fn: nn.Module,
+    anchor_loss_fn: nn.Module,
     show_progress: bool = False,
     desc: str = "Eval",
 ) -> Dict[str, object]:
     model.eval()
 
-    losses = {"total": 0.0, "coord": 0.0, "traj": 0.0, "cls": 0.0}
+    losses = {"total": 0.0, "coord": 0.0, "traj": 0.0, "cls": 0.0, "anchor": 0.0, "residual": 0.0}
     num_batches = 0
 
     all_errors: List[np.ndarray] = []
@@ -700,24 +941,27 @@ def evaluate(
         iterator = wrap_loader(loader, enabled=show_progress, desc=desc)
         for batch in iterator:
             batch = batch_to_device(batch, device)
-            outputs = model(batch["x"], batch["motion_x"])
+            outputs = model(batch["x"], batch["motion_x"], batch["group_id"])
             loss_dict = compute_loss(
                 outputs,
                 batch,
                 coord_weight=coord_weight,
                 traj_weight=traj_weight,
                 cls_weight=cls_weight,
+                anchor_weight=anchor_weight,
+                residual_weight=residual_weight,
                 cls_loss_fn=cls_loss_fn,
+                anchor_loss_fn=anchor_loss_fn,
             )
+            infer_outputs = model(batch["x"], batch["motion_x"], None)
 
             for key in losses:
                 losses[key] += float(loss_dict[key].item())
             num_batches += 1
 
-            pred_coord_raw = outputs["pred_coord"] * coord_std_t + coord_mean_t
+            pred_coord_raw = infer_outputs["pred_coord"] * coord_std_t + coord_mean_t
             error = torch.linalg.norm(pred_coord_raw - batch["y_last_raw"], dim=1)
-
-            pred_ids = outputs["logits"].argmax(dim=1)
+            pred_ids = infer_outputs["logits"].argmax(dim=1)
 
             all_errors.append(error.detach().cpu().numpy())
             all_targets.append(batch["y_last_raw"].detach().cpu().numpy())
@@ -762,13 +1006,16 @@ def train_one_epoch(
     coord_weight: float,
     traj_weight: float,
     cls_weight: float,
+    anchor_weight: float,
+    residual_weight: float,
     cls_loss_fn: nn.Module,
+    anchor_loss_fn: nn.Module,
     grad_clip: float,
     show_progress: bool = False,
     desc: str = "Train",
 ) -> Dict[str, float]:
     model.train()
-    losses = {"total": 0.0, "coord": 0.0, "traj": 0.0, "cls": 0.0}
+    losses = {"total": 0.0, "coord": 0.0, "traj": 0.0, "cls": 0.0, "anchor": 0.0, "residual": 0.0}
     num_batches = 0
 
     iterator = wrap_loader(loader, enabled=show_progress, desc=desc)
@@ -776,14 +1023,17 @@ def train_one_epoch(
         batch = batch_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
 
-        outputs = model(batch["x"], batch["motion_x"])
+        outputs = model(batch["x"], batch["motion_x"], batch["group_id"])
         loss_dict = compute_loss(
             outputs,
             batch,
             coord_weight=coord_weight,
             traj_weight=traj_weight,
             cls_weight=cls_weight,
+            anchor_weight=anchor_weight,
+            residual_weight=residual_weight,
             cls_loss_fn=cls_loss_fn,
+            anchor_loss_fn=anchor_loss_fn,
         )
         loss_dict["total"].backward()
 
@@ -800,6 +1050,7 @@ def train_one_epoch(
                 total=f"{loss_dict['total'].item():.4f}",
                 coord=f"{loss_dict['coord'].item():.4f}",
                 cls=f"{loss_dict['cls'].item():.4f}",
+                anchor=f"{loss_dict['anchor'].item():.4f}",
             )
 
     return {key: value / max(1, num_batches) for key, value in losses.items()}
@@ -846,7 +1097,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--coord-loss-weight", type=float, default=1.0)
     parser.add_argument("--traj-loss-weight", type=float, default=0.35)
     parser.add_argument("--cls-loss-weight", type=float, default=0.20)
+    parser.add_argument("--anchor-loss-weight", type=float, default=0.35)
+    parser.add_argument("--residual-loss-weight", type=float, default=0.25)
     parser.add_argument("--label-smoothing", type=float, default=0.05)
+    parser.add_argument("--anchor-divisor", type=int, default=2)
+    parser.add_argument("--min-anchors-per-group", type=int, default=8)
     parser.add_argument("--patience", type=int, default=12)
     parser.add_argument("--min-delta", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
@@ -892,10 +1147,10 @@ def main() -> None:
             raise ValueError("--eval-only requires --checkpoint.")
 
         checkpoint = torch.load(args.checkpoint, map_location=device)
-        stats = {
-            key: np.asarray(value, dtype=np.float32)
-            for key, value in checkpoint["stats"].items()
-        }
+        stats: Dict[str, np.ndarray] = {}
+        for key, value in checkpoint["stats"].items():
+            dtype = np.int64 if key == "anchor_group_ids" else np.float32
+            stats[key] = np.asarray(value, dtype=dtype)
         group_to_class = parse_group_to_class(checkpoint["group_to_class"])
         class_names = checkpoint["class_names"]
         motion_input_dim = int(checkpoint.get("motion_input_dim", test_motion_dim))
@@ -915,7 +1170,10 @@ def main() -> None:
 
         model = HybridCNNTCN(
             num_classes=len(class_names),
+            num_anchors=int(stats["anchor_centers_norm"].shape[0]),
             motion_input_dim=motion_input_dim,
+            anchor_centers_norm=stats["anchor_centers_norm"],
+            anchor_group_ids=stats["anchor_group_ids"].astype(np.int64),
             dropout=args.dropout,
             cnn_channels=(32, 64, 128),
             motion_hidden_dim=64,
@@ -924,6 +1182,7 @@ def main() -> None:
         model.load_state_dict(checkpoint["model_state_dict"])
 
         cls_loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+        anchor_loss_fn = nn.CrossEntropyLoss()
         test_metrics = evaluate(
             model=model,
             loader=test_loader,
@@ -933,7 +1192,10 @@ def main() -> None:
             coord_weight=args.coord_loss_weight,
             traj_weight=args.traj_loss_weight,
             cls_weight=args.cls_loss_weight,
+            anchor_weight=args.anchor_loss_weight,
+            residual_weight=args.residual_loss_weight,
             cls_loss_fn=cls_loss_fn,
+            anchor_loss_fn=anchor_loss_fn,
             show_progress=show_progress,
             desc="Test",
         )
@@ -989,6 +1251,8 @@ def main() -> None:
         test_arrays=test_arrays,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        anchor_divisor=args.anchor_divisor,
+        min_anchors_per_group=args.min_anchors_per_group,
     )
 
     print(f"Using device: {device}", flush=True)
@@ -1007,7 +1271,10 @@ def main() -> None:
 
     model = HybridCNNTCN(
         num_classes=len(class_names),
+        num_anchors=int(stats["anchor_centers_norm"].shape[0]),
         motion_input_dim=motion_input_dim,
+        anchor_centers_norm=stats["anchor_centers_norm"],
+        anchor_group_ids=stats["anchor_group_ids"].astype(np.int64),
         dropout=args.dropout,
         cnn_channels=(32, 64, 128),
         motion_hidden_dim=64,
@@ -1026,6 +1293,7 @@ def main() -> None:
         patience=4,
     )
     cls_loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+    anchor_loss_fn = nn.CrossEntropyLoss()
     early_stopper = EarlyStopping(patience=args.patience, min_delta=args.min_delta)
 
     best_model_path = output_dir / "best_model.pt"
@@ -1041,7 +1309,10 @@ def main() -> None:
             coord_weight=args.coord_loss_weight,
             traj_weight=args.traj_loss_weight,
             cls_weight=args.cls_loss_weight,
+            anchor_weight=args.anchor_loss_weight,
+            residual_weight=args.residual_loss_weight,
             cls_loss_fn=cls_loss_fn,
+            anchor_loss_fn=anchor_loss_fn,
             grad_clip=args.grad_clip,
             show_progress=show_progress,
             desc=f"Train {epoch}/{args.epochs}",
@@ -1056,7 +1327,10 @@ def main() -> None:
             coord_weight=args.coord_loss_weight,
             traj_weight=args.traj_loss_weight,
             cls_weight=args.cls_loss_weight,
+            anchor_weight=args.anchor_loss_weight,
+            residual_weight=args.residual_loss_weight,
             cls_loss_fn=cls_loss_fn,
+            anchor_loss_fn=anchor_loss_fn,
             show_progress=show_progress,
             desc=f"Val {epoch}/{args.epochs}",
         )
@@ -1071,10 +1345,14 @@ def main() -> None:
             "train_coord_loss": train_losses["coord"],
             "train_traj_loss": train_losses["traj"],
             "train_cls_loss": train_losses["cls"],
+            "train_anchor_loss": train_losses["anchor"],
+            "train_residual_loss": train_losses["residual"],
             "val_total_loss": val_metrics["losses"]["total"],
             "val_coord_loss": val_metrics["losses"]["coord"],
             "val_traj_loss": val_metrics["losses"]["traj"],
             "val_cls_loss": val_metrics["losses"]["cls"],
+            "val_anchor_loss": val_metrics["losses"]["anchor"],
+            "val_residual_loss": val_metrics["losses"]["residual"],
             "val_mean_error_m": val_metrics["mean_error_m"],
             "val_rmse_m": val_metrics["rmse_m"],
             "val_cls_acc": val_metrics["classification_accuracy"],
@@ -1124,7 +1402,10 @@ def main() -> None:
         coord_weight=args.coord_loss_weight,
         traj_weight=args.traj_loss_weight,
         cls_weight=args.cls_loss_weight,
+        anchor_weight=args.anchor_loss_weight,
+        residual_weight=args.residual_loss_weight,
         cls_loss_fn=cls_loss_fn,
+        anchor_loss_fn=anchor_loss_fn,
         show_progress=show_progress,
         desc="Test",
     )

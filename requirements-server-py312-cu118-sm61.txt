@@ -1,0 +1,12 @@
+# Python 3.12 + CUDA 11.8 wheels (broader legacy GPU arch coverage, incl. sm_61 on many torch builds)
+# Use this when your server has older GPUs such as Tesla P40 (sm_61).
+
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5
+matplotlib>=3.8
+tqdm>=4.67
+torch==2.7.0
