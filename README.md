@@ -1,41 +1,38 @@
 # IndoorPos
 
-An experimental repository for RSSI-based indoor localization.
+English | [简体中文](README.zh-CN.md)
 
-The original goal of this project was broad:
+An archived experimental repository for RSSI-based indoor localization.
 
-- train very small models for ESP32 / ESP32-S3 deployment
-- try higher-accuracy pure RSSI localization methods
-- compare classical fingerprinting, lightweight neural networks, larger neural networks, and trajectory-style models
-- benchmark everything on the same dataset splits
+This project explored several directions:
 
-In practice, the project produced useful baselines and a few clear lessons, but it did not reach the level of result needed to justify continued active development. This repository is therefore being archived in its current state.
+- tiny models for ESP32 / ESP32-S3 deployment
+- pure RSSI fingerprint baselines
+- stronger classical CPU-side localization models
+- larger Torch models
+- pseudo-trajectory / sequence-based models
+- server benchmark tooling
 
-## Dataset
+The repo is being archived because the final outcome was useful as an experiment log and benchmark reference, but not strong enough to justify continued active product work.
 
-The repo works with the original UJI-style Wi-Fi fingerprint data plus derived sequence datasets:
+## Repository Status
 
-- `archive/TrainingData.csv`
-- `archive/ValidationData.csv`
-- `training_dataset/`
-- `test_dataset/`
+Archived. The code is kept for:
 
-The sequence datasets are generated from the original data and are used by most of the benchmark scripts in this repository.
+- result traceability
+- reproduction of past experiments
+- comparing different localization families on the same derived datasets
 
-## Final Takeaways
+## What Finally Worked Best
 
-### 1. Pure RSSI classical methods remained very strong
+For **deployable pure RSSI absolute localization**, the best result in this repo came from:
 
-The strongest deployable pure RSSI result in this repo came from a tree-based tabular model rather than a neural network:
-
-- best model:
+- script: `TrainRSSITabularEnsemble.py`
+- model family: `ExtraTreesRegressor` + building/floor gate
+- final candidate:
   `extra_trees_est1200_mf0.5_leaf1_flatten_stat_top1`
-- script:
-  `TrainRSSITabularEnsemble.py`
-- key idea:
-  use a strong floor/building classifier first, then perform coordinate regression inside the predicted local region using a large `ExtraTreesRegressor`
 
-Local final test result:
+Final local pure RSSI test result:
 
 | method | mean (m) | median (m) | p90 (m) | p95 (m) | rmse (m) |
 |---|---:|---:|---:|---:|---:|
@@ -45,61 +42,286 @@ Local final test result:
 Interpretation:
 
 - the mean improvement over WKNN is small
-- the tail error improvement is real and meaningful
-- for navigation-style use, the reduced `p90`, `p95`, and `rmse` are the main reason to prefer the tabular model
-- WKNN still has a better median error on this dataset
+- the long-tail improvement is meaningful
+- `p90`, `p95`, `rmse`, and `max error` are all better than WKNN
+- the median error is still better for WKNN
 
-### 2. Bigger pure RSSI neural networks did not become the best solution
+For a hospital-style navigation setting, the lower long-tail error is the main reason to prefer the tabular model.
 
-Several pure RSSI neural models were tried, including MPS-accelerated Torch models on Apple Silicon. They trained correctly, but they did not beat the strongest tabular solution.
+Relevant artifacts:
 
-This repo therefore does **not** conclude that "more neural capacity" was the missing ingredient. For this dataset, the stronger direction was better fingerprint features plus stronger classical tabular regression.
+- `runs/local_pure_rssi/tabular_final/metrics.json`
+- `runs/local_pure_rssi/tabular_final/test_best_single_scatter.png`
+- `runs/local_pure_rssi/tabular_final/test_predictions_best_single.csv`
+- `runs/local_pure_rssi/knn_baseline_last_mean/metrics.json`
 
-### 3. Trajectory-style models looked good in a narrower setting, but were not the right final answer
+## Datasets
 
-Some trajectory / TCN-based models achieved very low short-window error in evaluation. However, they depended on assumptions that made them less suitable as the primary pure RSSI localization solution:
+This repo uses both the original Wi-Fi fingerprint CSVs and several derived sequence datasets.
 
-- they used sequential windows rather than single-shot cold start localization
-- some variants depended on proxy motion-like features
-- the evaluation setting was not as deployment-friendly as a pure RSSI absolute locator
+### Original CSVs
 
-For that reason, the final recommended direction in this repo is still the pure RSSI tabular model, not the trajectory model.
+Located in `archive/`:
 
-## Recommended Scripts
+- `archive/TrainingData.csv`
+- `archive/ValidationData.csv`
 
-### Pure RSSI benchmark entrypoint
+These are the base Wi-Fi fingerprint tables used to generate the sequence-style training/test sets.
 
-`RunPureRSSIBenchmarks.py`
+### Non-fixed sequence datasets
 
-Runs a focused pure RSSI comparison, including:
+Primary experiment datasets:
+
+- `training_dataset/`
+- `test_dataset/`
+
+Key properties from metadata:
+
+- source CSVs:
+  `archive/TrainingData.csv` and `archive/ValidationData.csv`
+- sequence length:
+  `5`
+- generation mode:
+  `endpoint_path`
+- selected APs:
+  `128`
+- train split:
+  `15949`
+- validation split:
+  `3988`
+- test split:
+  `1111`
+- augmentation:
+  RSSI noise enabled with `2.0 dBm`
+
+### Fixed sequence datasets
+
+Additional experiment datasets:
+
+- `training_dataset_fixed/`
+- `test_dataset_fixed/`
+
+These were used for some later fixed-dataset and hybrid experiments.
+
+### Rebuilding datasets
+
+Main generator:
+
+- `DatasetProc.py`
+
+Useful helper:
+
+- `visualize_dataset.py`
+
+Example:
+
+```bash
+python3 DatasetProc.py \
+  --input-csv archive/TrainingData.csv \
+  --output-dir training_dataset \
+  --seq-len 5
+```
+
+For larger server-side rebuild workflows, see:
+
+- `SERVER_TRAINING_GUIDE.md`
+- `DEPLOY_SERVER.md`
+
+## Algorithms Tried
+
+This section lists the main algorithm families that were actually implemented in this repository.
+
+### 1. Tiny ESP32-friendly models
+
+Script:
+
+- `TrainTinyESP32Model.py`
+
+Architectures:
+
+- depthwise-separable CNN (`dscnn`)
+- GRU (`gru`)
+- TCN (`tcn`)
+
+Goal:
+
+- fit into very small on-device footprints
+- explore ESP32-S3 deployment feasibility
+
+Related script:
+
+- `EvaluateTinyConsensus.py`
+
+This script tests repeated noisy inference plus consensus clustering to see whether multiple tiny runs can improve localization robustness.
+
+### 2. Pure RSSI WKNN baseline
+
+Script:
 
 - `TrainRSSIKNNModel.py`
+
+Method:
+
+- RSSI fingerprint features
+- nearest-neighbor matching
+- weighted and unweighted KNN
+- optional group-aware lookup
+- optional temporal filter
+
+This remained one of the strongest and most useful baselines in the repo.
+
+### 3. Advanced pure RSSI retrieval ensemble
+
+Script:
+
 - `TrainAdvancedRSSIEnsemble.py`
+
+Method:
+
+- multiple RSSI feature views
+- learned building/floor classifier
+- group-aware KNN
+- multiple neighbor aggregation rules:
+  `idw`, `idw2`, `kernel`, `softmax`, `trimmed_idw`, `median`, `lle`
+- validation-tuned greedy ensemble
+
+This was the strongest non-tree pure RSSI retrieval-style pipeline in the repo.
+
+### 4. Pure RSSI tabular ensemble
+
+Script:
+
 - `TrainRSSITabularEnsemble.py`
-- optionally `TrainRSSIOnlyHighAccuracyTorch.py`
 
-### Best pure RSSI final model
+Method:
 
-`TrainRSSITabularEnsemble.py`
+- building/floor classifier with RF / ExtraTrees
+- global and group-aware coordinate regressors
+- main regressors:
+  `ExtraTreesRegressor` and `RandomForestRegressor`
+- validation-driven model selection
+- optional ensemble of top candidates
 
-Recommended candidate family:
+This is the final recommended pure RSSI solution in the repo.
 
-- feature set: `flatten_stat`
-- regressor: `ExtraTrees`
-- group mode: `top1`
+### 5. High-accuracy classical model
 
-### Baseline
+Script:
 
-`TrainRSSIKNNModel.py`
+- `TrainHighAccuracyModel.py`
 
-Strong baseline:
+Method:
 
-- feature set: `last_mean`
-- candidate: `k1_w_global`
+- accuracy-first CPU-side pipeline
+- learned group classifier
+- group-aware KNN localizer
 
-## Example Commands
+This script was useful as an accuracy-first classical baseline, but it was not the final pure RSSI winner.
 
-### Run the pure RSSI benchmark
+Guide:
+
+- `HIGH_ACCURACY_GUIDE.md`
+
+### 6. High-accuracy Torch sequence model
+
+Script:
+
+- `TrainHighAccuracyTorchModel.py`
+
+Method:
+
+- sequence encoder
+- GRU-based temporal modeling
+- learned embedding
+- kNN refinement
+
+This script targeted server-side high-accuracy experimentation.
+
+### 7. Pure RSSI Torch model
+
+Script:
+
+- `TrainRSSIOnlyHighAccuracyTorch.py`
+
+Method:
+
+- pure RSSI sequence encoder
+- GRU-based temporal model
+- embedding + coordinate head
+- optional kNN refinement
+
+This was tested on Apple Silicon with MPS and on other hardware, but it did not beat the final tabular solution.
+
+### 8. Absolute RSSI-only neural regressor
+
+Script:
+
+- `TrainAbsoluteRSSIOnly.py`
+
+Method:
+
+- pure RSSI input
+- absolute coordinate regression
+- auxiliary grid classification head
+
+This direction was explored because it avoids trajectory recursion, but it did not become the final best solution.
+
+### 9. Lightweight sequence scheme zoo
+
+Script:
+
+- `TrainLightweightSchemeZoo.py`
+
+Model families:
+
+- `set_tcn`
+- `cnn_tcn`
+- `pure_tcn`
+
+Goal:
+
+- explore compact sequence models without going all the way down to the tiny ESP32 family
+
+### 10. Hybrid CNN + TCN
+
+Script:
+
+- `TrainHybridModel.py`
+
+Goal:
+
+- experiment with fixed-dataset hybrid temporal modeling
+
+### 11. Article-style trajectory models
+
+Scripts:
+
+- `TrainArticleTrajectoryModel.py`
+- `ArticlePureTCNModel.py`
+- `TrainAndVisualizeArticlePureTCN.py`
+- `article_model_visualization.html`
+
+Method:
+
+- Top-K AP tokenization / flattening
+- TCN-based temporal modeling
+- delta-position prediction
+- auxiliary grid classification
+- optional post-processing
+
+These models sometimes achieved low short-window error, but they were not the final recommended pure RSSI absolute localization approach because the evaluation setting was less deployment-friendly.
+
+## Benchmark Entry Points
+
+### Pure RSSI benchmark
+
+Script:
+
+- `RunPureRSSIBenchmarks.py`
+
+This is the best entry point for reproducing the final pure RSSI comparison.
+
+Example:
 
 ```bash
 python3 RunPureRSSIBenchmarks.py \
@@ -108,7 +330,49 @@ python3 RunPureRSSIBenchmarks.py \
   --output-root runs/pure_rssi_bench
 ```
 
-### Run the final tabular model only
+### Multi-model server benchmark
+
+Script:
+
+- `RunServerBenchmarks.py`
+
+Supporting scripts:
+
+- `run_full_benchmark_server.sh`
+- `setup_server_env.sh`
+- `SERVER_TRAINING_GUIDE.md`
+
+This path is intended for multi-model server-side benchmarking with stronger hardware.
+
+## Reproducibility
+
+### 1. Install dependencies
+
+For the pure RSSI CPU benchmark flow:
+
+```bash
+python3 -m pip install -r requirements-pure-rssi-bench.txt
+```
+
+For optional Torch experiments:
+
+- `requirements-torch-cu118.txt`
+- `requirements-torch-cu126.txt`
+- or a local Apple Silicon PyTorch installation with MPS support
+
+### 2. Reproduce the WKNN baseline
+
+```bash
+python3 TrainRSSIKNNModel.py \
+  --train-dir training_dataset \
+  --test-dir test_dataset \
+  --output-dir runs/local_pure_rssi/knn_baseline_last_mean \
+  --feature-set last_mean \
+  --k-candidates 1,3,5,7,9,11,15,21 \
+  --weighted
+```
+
+### 3. Reproduce the final pure RSSI winner
 
 ```bash
 python3 TrainRSSITabularEnsemble.py \
@@ -123,29 +387,34 @@ python3 TrainRSSITabularEnsemble.py \
   --n-jobs -1
 ```
 
-## Important Artifacts
+### 4. Reproduce MPS comparison on Apple Silicon
 
-Useful result files from the last local pure RSSI evaluation:
+```bash
+python3 TrainRSSIOnlyHighAccuracyTorch.py \
+  --train-dir training_dataset \
+  --test-dir test_dataset \
+  --output-dir runs/local_pure_rssi/rssi_torch_mps \
+  --device mps \
+  --epochs 100 \
+  --batch-size 384 \
+  --patience 12 \
+  --candidates 192:192:2:256:0.15,256:256:2:320:0.18,320:320:2:384:0.20 \
+  --num-workers 0
+```
 
-- `runs/local_pure_rssi/tabular_final/metrics.json`
-- `runs/local_pure_rssi/tabular_final/test_best_single_scatter.png`
-- `runs/local_pure_rssi/tabular_final/test_predictions_best_single.csv`
-- `runs/local_pure_rssi/knn_baseline_last_mean/metrics.json`
+## Why the Repository Was Archived
 
-## Dependencies
+The repository did produce working code and useful benchmark infrastructure, but the final localization quality was still not compelling enough for the intended product expectations.
 
-For the pure RSSI benchmark flow:
+More specifically:
 
-- `requirements-pure-rssi-bench.txt`
+- pure RSSI methods improved, but not dramatically enough
+- some trajectory-style methods looked better in narrower evaluation settings than they would likely be in deployment
+- the project accumulated many experiment paths, but not a single clearly satisfying end result
 
-For optional Torch experiments:
+So the most honest final state is:
 
-- `requirements-torch-cu118.txt`
-- `requirements-torch-cu126.txt`
-- or a local Apple Silicon / MPS-enabled PyTorch install
-
-## Repository Status
-
-Archived.
-
-This repo is being kept as an experiment log and benchmark reference rather than an actively improving product.
+- keep the repo
+- keep the scripts reproducible
+- document what was learned
+- stop pretending it already became a strong finished system
