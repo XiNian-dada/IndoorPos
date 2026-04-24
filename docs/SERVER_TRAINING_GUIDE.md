@@ -5,14 +5,14 @@ This guide is for high-performance Linux servers with NVIDIA GPUs.
 ## 1) Install Dependencies
 
 ```bash
-chmod +x setup_server_env.sh
-PYTHON_BIN=python3.12 REQ_FILE=requirements-server-py312-cu130.txt ./setup_server_env.sh
+chmod +x tools/setup_server_env.sh
+PYTHON_BIN=python3.12 REQ_FILE=requirements/requirements-server-py312-cu130.txt ./tools/setup_server_env.sh
 source .venv-server/bin/activate
 ```
 
 Dependency file used:
 
-- `requirements-server-py312-cu130.txt`
+- `requirements/requirements-server-py312-cu130.txt`
 
 ## 2) Build Pseudo-Temporal Dataset (Recommended)
 
@@ -20,7 +20,7 @@ If you need trajectory-aware training without collecting new data, rebuild train
 
 ```bash
 # train split from TrainingData.csv
-python3 DatasetProc.py \
+python3 scripts/DatasetProc.py \
   --input-csv archive/TrainingData.csv \
   --output-dir training_dataset_seq \
   --seq-len 5 \
@@ -39,7 +39,7 @@ print("wrote training_dataset_seq/selected_waps.json")
 PY
 
 # test split from ValidationData.csv (reuse AP list from train metadata)
-python3 DatasetProc.py \
+python3 scripts/DatasetProc.py \
   --input-csv archive/ValidationData.csv \
   --output-dir test_dataset_seq \
   --selected-waps-json training_dataset_seq/selected_waps.json \
@@ -61,15 +61,15 @@ Train multiple tiny scales/architectures and optionally high-accuracy models, th
 Quick one-command launcher (recommended):
 
 ```bash
-chmod +x run_full_benchmark_server.sh
+chmod +x tools/run_full_benchmark_server.sh
 TINY_GPU_IDS=0 LIGHTWEIGHT_GPU_ID=0 ARTICLE_GPU_ID=0 HIGH_TORCH_GPU_ID=0 \
-  ./run_full_benchmark_server.sh training_dataset_seq test_dataset_seq runs/server_model_zoo
+  ./tools/run_full_benchmark_server.sh training_dataset_seq test_dataset_seq runs/server_model_zoo
 ```
 
 Manual command (full control):
 
 ```bash
-python3 RunServerBenchmarks.py \
+python3 scripts/RunServerBenchmarks.py \
   --train-dir training_dataset_seq \
   --test-dir test_dataset_seq \
   --output-root runs/server_model_zoo \
@@ -121,7 +121,7 @@ Notes:
 ## 4) Rebuild Summary Only (No Retraining)
 
 ```bash
-python3 RunServerBenchmarks.py \
+python3 scripts/RunServerBenchmarks.py \
   --output-root runs/server_model_zoo \
   --tiny-specs "tiny_s=16:24@7,tiny_m=24:32@7,tiny_l=32:48@7,tiny_xl=40:64:64@7" \
   --run-high-accuracy \

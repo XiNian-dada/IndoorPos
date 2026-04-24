@@ -2,14 +2,14 @@
 
 This repo now includes a high-accuracy pipeline:
 
-- Training script: `TrainHighAccuracyModel.py`
+- Training script: `scripts/TrainHighAccuracyModel.py`
 - Default dataset: `training_dataset` + `test_dataset` (non-fixed)
 - Output directory example: `runs/high_accuracy_hospital_v1`
 
 ## 1) Train
 
 ```bash
-python3 TrainHighAccuracyModel.py \
+python3 scripts/TrainHighAccuracyModel.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/high_accuracy_hospital_v1
@@ -26,4 +26,4 @@ python3 TrainHighAccuracyModel.py \
 
 - This is accuracy-first, not size-first.
 - The model bundle is large (hundreds of MB), intended for server-side inference.
-- For on-device ESP32S3 deployment, keep using tiny models from `TrainTinyESP32Model.py`.
+- For on-device ESP32S3 deployment, keep using tiny models from `scripts/TrainTinyESP32Model.py`.

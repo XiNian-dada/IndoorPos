@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 # Usage example:
-#   bash run_full_benchmark_server.sh \
+#   bash tools/run_full_benchmark_server.sh \
 #     training_dataset_seq test_dataset_seq runs/server_full_benchmark
 
 TRAIN_DIR="${1:-training_dataset_seq}"
@@ -13,7 +16,9 @@ LIGHTWEIGHT_GPU_ID="${LIGHTWEIGHT_GPU_ID:-0}"
 ARTICLE_GPU_ID="${ARTICLE_GPU_ID:-0}"
 HIGH_TORCH_GPU_ID="${HIGH_TORCH_GPU_ID:-0}"
 
-python3 RunServerBenchmarks.py \
+cd "${REPO_ROOT}"
+
+python3 scripts/RunServerBenchmarks.py \
   --train-dir "${TRAIN_DIR}" \
   --test-dir "${TEST_DIR}" \
   --output-root "${OUTPUT_ROOT}" \

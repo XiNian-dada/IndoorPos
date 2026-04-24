@@ -25,12 +25,30 @@
 - 方便别人复现实验
 - 给后续类似 RSSI 定位项目提供参考
 
+## 目录结构
+
+```text
+IndoorPos/
+├── README.md
+├── README.zh-CN.md
+├── scripts/         # 训练、评估、数据集生成、benchmark 入口
+├── docs/            # 实验说明、部署/服务器指南、HTML 可视化
+├── requirements/    # 本地 / 服务器 / CUDA 依赖集合
+├── tools/           # 辅助 shell / bat 启动脚本
+├── archive/         # 原始 CSV 指纹数据集
+├── training_dataset/
+├── test_dataset/
+├── training_dataset_fixed/
+├── test_dataset_fixed/
+└── runs/            # 生成的实验结果
+```
+
 ## 最终最靠谱的方案
 
 对于**可部署的纯 RSSI 绝对定位**，这个仓库最后最好的方法不是神经网络，而是：
 
 - 脚本：
-  `TrainRSSITabularEnsemble.py`
+  `scripts/TrainRSSITabularEnsemble.py`
 - 方法：
   `ExtraTreesRegressor + 楼栋/楼层门控`
 - 最优候选：
@@ -111,16 +129,16 @@
 
 主生成脚本：
 
-- `DatasetProc.py`
+- `scripts/DatasetProc.py`
 
 可视化脚本：
 
-- `visualize_dataset.py`
+- `scripts/visualize_dataset.py`
 
 示例：
 
 ```bash
-python3 DatasetProc.py \
+python3 scripts/DatasetProc.py \
   --input-csv archive/TrainingData.csv \
   --output-dir training_dataset \
   --seq-len 5
@@ -128,8 +146,8 @@ python3 DatasetProc.py \
 
 如果需要更完整的服务器侧数据重建与训练流程，可以看：
 
-- `SERVER_TRAINING_GUIDE.md`
-- `DEPLOY_SERVER.md`
+- `docs/SERVER_TRAINING_GUIDE.md`
+- `docs/DEPLOY_SERVER.md`
 
 ## 尝试过的算法
 
@@ -139,7 +157,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainTinyESP32Model.py`
+- `scripts/TrainTinyESP32Model.py`
 
 支持的结构：
 
@@ -154,7 +172,7 @@ python3 DatasetProc.py \
 
 相关脚本：
 
-- `EvaluateTinyConsensus.py`
+- `scripts/EvaluateTinyConsensus.py`
 
 这个脚本会做多次带扰动推理，再做共识聚类，看 tiny 模型能不能靠多次投票改善稳定性。
 
@@ -162,7 +180,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainRSSIKNNModel.py`
+- `scripts/TrainRSSIKNNModel.py`
 
 方法：
 
@@ -178,7 +196,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainAdvancedRSSIEnsemble.py`
+- `scripts/TrainAdvancedRSSIEnsemble.py`
 
 方法：
 
@@ -195,7 +213,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainRSSITabularEnsemble.py`
+- `scripts/TrainRSSITabularEnsemble.py`
 
 方法：
 
@@ -212,7 +230,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainHighAccuracyModel.py`
+- `scripts/TrainHighAccuracyModel.py`
 
 方法：
 
@@ -223,13 +241,13 @@ python3 DatasetProc.py \
 
 相关说明：
 
-- `HIGH_ACCURACY_GUIDE.md`
+- `docs/HIGH_ACCURACY_GUIDE.md`
 
 ### 6. 高精度 Torch 序列模型
 
 脚本：
 
-- `TrainHighAccuracyTorchModel.py`
+- `scripts/TrainHighAccuracyTorchModel.py`
 
 方法：
 
@@ -244,7 +262,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainRSSIOnlyHighAccuracyTorch.py`
+- `scripts/TrainRSSIOnlyHighAccuracyTorch.py`
 
 方法：
 
@@ -259,7 +277,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainAbsoluteRSSIOnly.py`
+- `scripts/TrainAbsoluteRSSIOnly.py`
 
 方法：
 
@@ -273,7 +291,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainLightweightSchemeZoo.py`
+- `scripts/TrainLightweightSchemeZoo.py`
 
 尝试过的家族：
 
@@ -290,7 +308,7 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `TrainHybridModel.py`
+- `scripts/TrainHybridModel.py`
 
 目标：
 
@@ -300,10 +318,10 @@ python3 DatasetProc.py \
 
 相关脚本：
 
-- `TrainArticleTrajectoryModel.py`
-- `ArticlePureTCNModel.py`
-- `TrainAndVisualizeArticlePureTCN.py`
-- `article_model_visualization.html`
+- `scripts/TrainArticleTrajectoryModel.py`
+- `scripts/ArticlePureTCNModel.py`
+- `scripts/TrainAndVisualizeArticlePureTCN.py`
+- `docs/article_model_visualization.html`
 
 方法：
 
@@ -321,14 +339,14 @@ python3 DatasetProc.py \
 
 脚本：
 
-- `RunPureRSSIBenchmarks.py`
+- `scripts/RunPureRSSIBenchmarks.py`
 
 这是复现纯 RSSI 最终对比的最佳入口。
 
 示例：
 
 ```bash
-python3 RunPureRSSIBenchmarks.py \
+python3 scripts/RunPureRSSIBenchmarks.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-root runs/pure_rssi_bench
@@ -338,13 +356,13 @@ python3 RunPureRSSIBenchmarks.py \
 
 脚本：
 
-- `RunServerBenchmarks.py`
+- `scripts/RunServerBenchmarks.py`
 
 配套脚本：
 
-- `run_full_benchmark_server.sh`
-- `setup_server_env.sh`
-- `SERVER_TRAINING_GUIDE.md`
+- `tools/run_full_benchmark_server.sh`
+- `tools/setup_server_env.sh`
+- `docs/SERVER_TRAINING_GUIDE.md`
 
 适合高性能服务器上同时跑多种模型做总对比。
 
@@ -355,19 +373,19 @@ python3 RunPureRSSIBenchmarks.py \
 如果只复现纯 RSSI 的 CPU benchmark：
 
 ```bash
-python3 -m pip install -r requirements-pure-rssi-bench.txt
+python3 -m pip install -r requirements/requirements-pure-rssi-bench.txt
 ```
 
 如果还要跑 Torch 实验：
 
-- `requirements-torch-cu118.txt`
-- `requirements-torch-cu126.txt`
+- `requirements/requirements-torch-cu118.txt`
+- `requirements/requirements-torch-cu126.txt`
 - 或者本地 Apple Silicon + MPS 可用的 PyTorch 环境
 
 ### 2. 复现 WKNN 基线
 
 ```bash
-python3 TrainRSSIKNNModel.py \
+python3 scripts/TrainRSSIKNNModel.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/local_pure_rssi/knn_baseline_last_mean \
@@ -379,7 +397,7 @@ python3 TrainRSSIKNNModel.py \
 ### 3. 复现最终纯 RSSI 冠军
 
 ```bash
-python3 TrainRSSITabularEnsemble.py \
+python3 scripts/TrainRSSITabularEnsemble.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/local_pure_rssi/tabular_final \
@@ -394,7 +412,7 @@ python3 TrainRSSITabularEnsemble.py \
 ### 4. 复现 Apple Silicon / MPS 对比实验
 
 ```bash
-python3 TrainRSSIOnlyHighAccuracyTorch.py \
+python3 scripts/TrainRSSIOnlyHighAccuracyTorch.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/local_pure_rssi/rssi_torch_mps \

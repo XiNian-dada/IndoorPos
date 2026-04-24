@@ -23,11 +23,29 @@ Archived. The code is kept for:
 - reproduction of past experiments
 - comparing different localization families on the same derived datasets
 
+## Project Layout
+
+```text
+IndoorPos/
+├── README.md
+├── README.zh-CN.md
+├── scripts/         # training, evaluation, dataset, benchmark entrypoints
+├── docs/            # experiment notes, deployment/server guides, HTML visualization
+├── requirements/    # dependency sets for local/server/CUDA variants
+├── tools/           # helper shell / bat launchers
+├── archive/         # original CSV fingerprint datasets
+├── training_dataset/
+├── test_dataset/
+├── training_dataset_fixed/
+├── test_dataset_fixed/
+└── runs/            # generated experiment outputs
+```
+
 ## What Finally Worked Best
 
 For **deployable pure RSSI absolute localization**, the best result in this repo came from:
 
-- script: `TrainRSSITabularEnsemble.py`
+- script: `scripts/TrainRSSITabularEnsemble.py`
 - model family: `ExtraTreesRegressor` + building/floor gate
 - final candidate:
   `extra_trees_est1200_mf0.5_leaf1_flatten_stat_top1`
@@ -107,16 +125,16 @@ These were used for some later fixed-dataset and hybrid experiments.
 
 Main generator:
 
-- `DatasetProc.py`
+- `scripts/DatasetProc.py`
 
 Useful helper:
 
-- `visualize_dataset.py`
+- `scripts/visualize_dataset.py`
 
 Example:
 
 ```bash
-python3 DatasetProc.py \
+python3 scripts/DatasetProc.py \
   --input-csv archive/TrainingData.csv \
   --output-dir training_dataset \
   --seq-len 5
@@ -124,8 +142,8 @@ python3 DatasetProc.py \
 
 For larger server-side rebuild workflows, see:
 
-- `SERVER_TRAINING_GUIDE.md`
-- `DEPLOY_SERVER.md`
+- `docs/SERVER_TRAINING_GUIDE.md`
+- `docs/DEPLOY_SERVER.md`
 
 ## Algorithms Tried
 
@@ -135,7 +153,7 @@ This section lists the main algorithm families that were actually implemented in
 
 Script:
 
-- `TrainTinyESP32Model.py`
+- `scripts/TrainTinyESP32Model.py`
 
 Architectures:
 
@@ -150,7 +168,7 @@ Goal:
 
 Related script:
 
-- `EvaluateTinyConsensus.py`
+- `scripts/EvaluateTinyConsensus.py`
 
 This script tests repeated noisy inference plus consensus clustering to see whether multiple tiny runs can improve localization robustness.
 
@@ -158,7 +176,7 @@ This script tests repeated noisy inference plus consensus clustering to see whet
 
 Script:
 
-- `TrainRSSIKNNModel.py`
+- `scripts/TrainRSSIKNNModel.py`
 
 Method:
 
@@ -174,7 +192,7 @@ This remained one of the strongest and most useful baselines in the repo.
 
 Script:
 
-- `TrainAdvancedRSSIEnsemble.py`
+- `scripts/TrainAdvancedRSSIEnsemble.py`
 
 Method:
 
@@ -191,7 +209,7 @@ This was the strongest non-tree pure RSSI retrieval-style pipeline in the repo.
 
 Script:
 
-- `TrainRSSITabularEnsemble.py`
+- `scripts/TrainRSSITabularEnsemble.py`
 
 Method:
 
@@ -208,7 +226,7 @@ This is the final recommended pure RSSI solution in the repo.
 
 Script:
 
-- `TrainHighAccuracyModel.py`
+- `scripts/TrainHighAccuracyModel.py`
 
 Method:
 
@@ -220,13 +238,13 @@ This script was useful as an accuracy-first classical baseline, but it was not t
 
 Guide:
 
-- `HIGH_ACCURACY_GUIDE.md`
+- `docs/HIGH_ACCURACY_GUIDE.md`
 
 ### 6. High-accuracy Torch sequence model
 
 Script:
 
-- `TrainHighAccuracyTorchModel.py`
+- `scripts/TrainHighAccuracyTorchModel.py`
 
 Method:
 
@@ -241,7 +259,7 @@ This script targeted server-side high-accuracy experimentation.
 
 Script:
 
-- `TrainRSSIOnlyHighAccuracyTorch.py`
+- `scripts/TrainRSSIOnlyHighAccuracyTorch.py`
 
 Method:
 
@@ -256,7 +274,7 @@ This was tested on Apple Silicon with MPS and on other hardware, but it did not 
 
 Script:
 
-- `TrainAbsoluteRSSIOnly.py`
+- `scripts/TrainAbsoluteRSSIOnly.py`
 
 Method:
 
@@ -270,7 +288,7 @@ This direction was explored because it avoids trajectory recursion, but it did n
 
 Script:
 
-- `TrainLightweightSchemeZoo.py`
+- `scripts/TrainLightweightSchemeZoo.py`
 
 Model families:
 
@@ -286,7 +304,7 @@ Goal:
 
 Script:
 
-- `TrainHybridModel.py`
+- `scripts/TrainHybridModel.py`
 
 Goal:
 
@@ -296,10 +314,10 @@ Goal:
 
 Scripts:
 
-- `TrainArticleTrajectoryModel.py`
-- `ArticlePureTCNModel.py`
-- `TrainAndVisualizeArticlePureTCN.py`
-- `article_model_visualization.html`
+- `scripts/TrainArticleTrajectoryModel.py`
+- `scripts/ArticlePureTCNModel.py`
+- `scripts/TrainAndVisualizeArticlePureTCN.py`
+- `docs/article_model_visualization.html`
 
 Method:
 
@@ -317,14 +335,14 @@ These models sometimes achieved low short-window error, but they were not the fi
 
 Script:
 
-- `RunPureRSSIBenchmarks.py`
+- `scripts/RunPureRSSIBenchmarks.py`
 
 This is the best entry point for reproducing the final pure RSSI comparison.
 
 Example:
 
 ```bash
-python3 RunPureRSSIBenchmarks.py \
+python3 scripts/RunPureRSSIBenchmarks.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-root runs/pure_rssi_bench
@@ -334,13 +352,13 @@ python3 RunPureRSSIBenchmarks.py \
 
 Script:
 
-- `RunServerBenchmarks.py`
+- `scripts/RunServerBenchmarks.py`
 
 Supporting scripts:
 
-- `run_full_benchmark_server.sh`
-- `setup_server_env.sh`
-- `SERVER_TRAINING_GUIDE.md`
+- `tools/run_full_benchmark_server.sh`
+- `tools/setup_server_env.sh`
+- `docs/SERVER_TRAINING_GUIDE.md`
 
 This path is intended for multi-model server-side benchmarking with stronger hardware.
 
@@ -351,19 +369,19 @@ This path is intended for multi-model server-side benchmarking with stronger har
 For the pure RSSI CPU benchmark flow:
 
 ```bash
-python3 -m pip install -r requirements-pure-rssi-bench.txt
+python3 -m pip install -r requirements/requirements-pure-rssi-bench.txt
 ```
 
 For optional Torch experiments:
 
-- `requirements-torch-cu118.txt`
-- `requirements-torch-cu126.txt`
+- `requirements/requirements-torch-cu118.txt`
+- `requirements/requirements-torch-cu126.txt`
 - or a local Apple Silicon PyTorch installation with MPS support
 
 ### 2. Reproduce the WKNN baseline
 
 ```bash
-python3 TrainRSSIKNNModel.py \
+python3 scripts/TrainRSSIKNNModel.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/local_pure_rssi/knn_baseline_last_mean \
@@ -375,7 +393,7 @@ python3 TrainRSSIKNNModel.py \
 ### 3. Reproduce the final pure RSSI winner
 
 ```bash
-python3 TrainRSSITabularEnsemble.py \
+python3 scripts/TrainRSSITabularEnsemble.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/local_pure_rssi/tabular_final \
@@ -390,7 +408,7 @@ python3 TrainRSSITabularEnsemble.py \
 ### 4. Reproduce MPS comparison on Apple Silicon
 
 ```bash
-python3 TrainRSSIOnlyHighAccuracyTorch.py \
+python3 scripts/TrainRSSIOnlyHighAccuracyTorch.py \
   --train-dir training_dataset \
   --test-dir test_dataset \
   --output-dir runs/local_pure_rssi/rssi_torch_mps \

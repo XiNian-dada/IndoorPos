@@ -97,7 +97,7 @@ def validate_selected_waps(
             "Train/test selected_waps are not identical. "
             f"train={len(train_waps)}, test={len(test_waps)}, overlap={overlap}. "
             "Rebuild the test dataset with the training metadata via "
-            "'DatasetProc.py --selected-waps-json training_dataset_fixed/metadata.json'."
+            "'scripts/DatasetProc.py --selected-waps-json training_dataset_fixed/metadata.json'."
         )
 
 

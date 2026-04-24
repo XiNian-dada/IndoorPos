@@ -16,7 +16,7 @@ if not exist "runs" (
     mkdir "runs"
 )
 
-python TrainHybridModel.py ^
+python scripts/TrainHybridModel.py ^
   --train-dir training_dataset_fixed ^
   --test-dir test_dataset_fixed ^
   --epochs 150 ^

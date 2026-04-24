@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 
 def run_cmd(cmd: List[str], env: Optional[Dict[str, str]] = None) -> None:
     print("\n$ " + " ".join(cmd), flush=True)
@@ -22,6 +24,10 @@ def parse_extra_args(raw: str) -> List[str]:
     if not raw:
         return []
     return shlex.split(raw)
+
+
+def script_path(name: str) -> str:
+    return str(SCRIPT_DIR / name)
 
 
 def file_size_mb(path: Path) -> float:
@@ -202,25 +208,25 @@ def main() -> None:
             "rssi_knn",
             run_knn,
             output_root / "rssi_knn",
-            ["python3", "TrainRSSIKNNModel.py", "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "rssi_knn")] + parse_extra_args(args.knn_extra_args),
+            ["python3", script_path("TrainRSSIKNNModel.py"), "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "rssi_knn")] + parse_extra_args(args.knn_extra_args),
         ),
         (
             "advanced_rssi",
             run_advanced,
             output_root / "advanced_rssi",
-            ["python3", "TrainAdvancedRSSIEnsemble.py", "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "advanced_rssi")] + parse_extra_args(args.advanced_extra_args),
+            ["python3", script_path("TrainAdvancedRSSIEnsemble.py"), "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "advanced_rssi")] + parse_extra_args(args.advanced_extra_args),
         ),
         (
             "tabular_rssi",
             run_tabular,
             output_root / "tabular_rssi",
-            ["python3", "TrainRSSITabularEnsemble.py", "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "tabular_rssi")] + parse_extra_args(args.tabular_extra_args),
+            ["python3", script_path("TrainRSSITabularEnsemble.py"), "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "tabular_rssi")] + parse_extra_args(args.tabular_extra_args),
         ),
         (
             "rssi_torch",
             run_torch,
             output_root / "rssi_torch",
-            ["python3", "TrainRSSIOnlyHighAccuracyTorch.py", "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "rssi_torch")] + parse_extra_args(args.torch_extra_args),
+            ["python3", script_path("TrainRSSIOnlyHighAccuracyTorch.py"), "--train-dir", args.train_dir, "--test-dir", args.test_dir, "--output-dir", str(output_root / "rssi_torch")] + parse_extra_args(args.torch_extra_args),
         ),
     ]
 

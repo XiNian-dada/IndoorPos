@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 
 @dataclass
 class TinySpec:
@@ -58,6 +60,10 @@ def run_cmd(
     subprocess.run(cmd, check=True, env=env)
 
 
+def script_path(name: str) -> str:
+    return str(SCRIPT_DIR / name)
+
+
 def tiny_metrics_path(output_dir: Path) -> Path:
     return output_dir / "metrics.json"
 
@@ -80,7 +86,7 @@ def build_tiny_cmd(
 ) -> List[str]:
     cmd: List[str] = [
         "python3",
-        "TrainTinyESP32Model.py",
+        script_path("TrainTinyESP32Model.py"),
         "--train-dir", args.train_dir,
         "--test-dir", args.test_dir,
         "--output-dir", str(output_dir),
@@ -246,7 +252,7 @@ def maybe_run_high_accuracy(args: argparse.Namespace, output_dir: Path) -> None:
 
     cmd = [
         "python3",
-        "TrainHighAccuracyModel.py",
+        script_path("TrainHighAccuracyModel.py"),
         "--train-dir", args.train_dir,
         "--test-dir", args.test_dir,
         "--output-dir", str(output_dir),
@@ -268,7 +274,7 @@ def maybe_run_high_accuracy_torch(args: argparse.Namespace, output_dir: Path) ->
 
     cmd = [
         "python3",
-        "TrainHighAccuracyTorchModel.py",
+        script_path("TrainHighAccuracyTorchModel.py"),
         "--train-dir", args.train_dir,
         "--test-dir", args.test_dir,
         "--output-dir", str(output_dir),
@@ -303,7 +309,7 @@ def maybe_run_lightweight_zoo(args: argparse.Namespace, output_dir: Path) -> Non
 
     cmd = [
         "python3",
-        "TrainLightweightSchemeZoo.py",
+        script_path("TrainLightweightSchemeZoo.py"),
         "--train-dir", args.train_dir,
         "--test-dir", args.test_dir,
         "--output-dir", str(output_dir),
@@ -341,7 +347,7 @@ def maybe_run_article_model(args: argparse.Namespace, output_dir: Path) -> None:
     test_dir = args.article_test_dir.strip() or args.test_dir
     cmd = [
         "python3",
-        "TrainArticleTrajectoryModel.py",
+        script_path("TrainArticleTrajectoryModel.py"),
         "--train-dir", train_dir,
         "--test-dir", test_dir,
         "--output-dir", str(output_dir),
@@ -392,7 +398,7 @@ def maybe_run_rssi_knn(args: argparse.Namespace, output_dir: Path) -> None:
 
     cmd = [
         "python3",
-        "TrainRSSIKNNModel.py",
+        script_path("TrainRSSIKNNModel.py"),
         "--train-dir", args.train_dir,
         "--test-dir", args.test_dir,
         "--output-dir", str(output_dir),
@@ -450,7 +456,7 @@ def maybe_run_tiny_consensus(
 
     cmd = [
         "python3",
-        "EvaluateTinyConsensus.py",
+        script_path("EvaluateTinyConsensus.py"),
         "--checkpoint", str(checkpoint),
         "--test-dir", args.test_dir,
         "--output-dir", str(consensus_dir),

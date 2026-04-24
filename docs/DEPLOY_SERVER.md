@@ -6,7 +6,7 @@ Recommended for a Linux server with an NVIDIA 2080 Ti:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -r requirements-torch-cu126.txt
+pip install -r requirements/requirements-torch-cu126.txt
 ```
 
 The packaged code is kept compatible with Python 3.9. A newer Python version
@@ -19,7 +19,7 @@ install line with a wheel index that matches that environment.
 Example training command:
 
 ```bash
-PYTHONUNBUFFERED=1 python3 TrainHybridModel.py \
+PYTHONUNBUFFERED=1 python3 scripts/TrainHybridModel.py \
   --train-dir training_dataset_fixed \
   --test-dir test_dataset_fixed \
   --epochs 150 \

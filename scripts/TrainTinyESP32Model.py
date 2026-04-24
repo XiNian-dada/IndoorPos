@@ -1113,11 +1113,11 @@ def main() -> None:
     test_dir = Path(args.test_dir)
     if not train_dir.exists():
         raise FileNotFoundError(
-            f"Train dir '{train_dir}' not found. Build non-fixed dataset first with DatasetProc.py."
+            f"Train dir '{train_dir}' not found. Build non-fixed dataset first with scripts/DatasetProc.py."
         )
     if not test_dir.exists():
         raise FileNotFoundError(
-            f"Test dir '{test_dir}' not found. Build non-fixed dataset first with DatasetProc.py."
+            f"Test dir '{test_dir}' not found. Build non-fixed dataset first with scripts/DatasetProc.py."
         )
 
     output_dir = Path(args.output_dir)
