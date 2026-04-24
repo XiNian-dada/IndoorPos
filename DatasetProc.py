@@ -70,6 +70,8 @@ class Config:
 
     # sequence construction
     seq_len: int = 5
+    trajectory_total_len: int = 0  # 0 => use seq_len (legacy behavior)
+    window_stride: int = 1
     sequence_generation_mode: str = "endpoint_path"
     paths_per_endpoint: int = 1
     trajectories_per_group: int = 2000
@@ -682,6 +684,40 @@ class PseudoTemporalBuilder:
             axis=1,
         ).astype(np.float32)
 
+    def effective_trajectory_total_len(self) -> int:
+        if self.cfg.trajectory_total_len <= 0:
+            return int(self.cfg.seq_len)
+        return int(max(self.cfg.seq_len, self.cfg.trajectory_total_len))
+
+    def num_anchor_points_for_trajectory(self, total_len: int) -> int:
+        interp = int(self.cfg.interpolation_steps)
+        if interp < 0:
+            raise ValueError("interpolation_steps must be >= 0.")
+        anchors = math.ceil((int(total_len) + interp) / (interp + 1))
+        return max(1, int(anchors))
+
+    def expanded_length_from_anchors(self, num_anchor_points: int) -> int:
+        interp = int(self.cfg.interpolation_steps)
+        return int(num_anchor_points * (interp + 1) - interp)
+
+    def estimate_windows_per_trajectory(self, expanded_len: int) -> int:
+        if expanded_len < self.cfg.seq_len:
+            return 0
+        stride = max(1, int(self.cfg.window_stride))
+        return int((expanded_len - self.cfg.seq_len) // stride + 1)
+
+    def generate_window_start_indices(self, total_len: int) -> List[int]:
+        if total_len < self.cfg.seq_len:
+            return []
+        stride = max(1, int(self.cfg.window_stride))
+        last_start = total_len - self.cfg.seq_len
+        starts = list(range(0, last_start + 1, stride))
+        if not starts:
+            starts = [0]
+        elif starts[-1] != last_start:
+            starts.append(last_start)
+        return starts
+
     def cut_sliding_windows(
         self,
         rssi_seq: np.ndarray,
@@ -697,7 +733,7 @@ class PseudoTemporalBuilder:
         if total_len < self.cfg.seq_len:
             return samples
 
-        for start in range(0, total_len - self.cfg.seq_len + 1):
+        for start in self.generate_window_start_indices(total_len):
             end = start + self.cfg.seq_len
 
             x_window = rssi_seq[start:end].astype(np.float32)
@@ -898,6 +934,31 @@ class PseudoTemporalBuilder:
         }
         return int(len(train_keys.intersection(val_keys)))
 
+    @staticmethod
+    def summarize_windows_per_trajectory(arrays: Dict[str, np.ndarray]) -> Dict[str, float]:
+        if "trajectory_id" not in arrays or arrays["trajectory_id"].size == 0:
+            return {
+                "num_trajectories": 0.0,
+                "mean_windows_per_trajectory": 0.0,
+                "median_windows_per_trajectory": 0.0,
+                "p90_windows_per_trajectory": 0.0,
+                "max_windows_per_trajectory": 0.0,
+                "min_windows_per_trajectory": 0.0,
+                "num_trajectories_with_ge2_windows": 0.0,
+            }
+        traj_ids = arrays["trajectory_id"].astype(np.int32)
+        _, counts = np.unique(traj_ids, return_counts=True)
+        counts_f = counts.astype(np.float32)
+        return {
+            "num_trajectories": float(len(counts)),
+            "mean_windows_per_trajectory": float(counts_f.mean()),
+            "median_windows_per_trajectory": float(np.median(counts_f)),
+            "p90_windows_per_trajectory": float(np.quantile(counts_f, 0.90)),
+            "max_windows_per_trajectory": float(counts_f.max()),
+            "min_windows_per_trajectory": float(counts_f.min()),
+            "num_trajectories_with_ge2_windows": float((counts_f >= 2).sum()),
+        }
+
     def build_metadata(
         self,
         arrays: Dict[str, np.ndarray],
@@ -918,6 +979,11 @@ class PseudoTemporalBuilder:
             "num_unique_trajectories": int(np.unique(arrays["trajectory_id"]).shape[0]),
             "num_unique_source_windows": int(np.unique(arrays["source_window_id"]).shape[0]),
             "deduplicated_windows_removed": int(deduplicated_windows_removed),
+            "trajectory_window_stats": {
+                "all": self.summarize_windows_per_trajectory(arrays),
+                "train": self.summarize_windows_per_trajectory(train_arrays),
+                "val": self.summarize_windows_per_trajectory(val_arrays),
+            },
             "split_quality": {
                 "split_by_trajectory": bool(self.cfg.split_by_trajectory),
                 "shared_source_windows_train_val": int(shared_source_windows_train_val),
@@ -933,6 +999,8 @@ class PseudoTemporalBuilder:
                 "trajectories_are_pseudo_temporal": True,
                 "sequence_generation_mode": self.cfg.sequence_generation_mode,
                 "paths_per_endpoint": int(self.cfg.paths_per_endpoint),
+                "window_stride": int(self.cfg.window_stride),
+                "trajectory_total_len": int(self.effective_trajectory_total_len()),
                 "coordinate_columns": self.coord_cols,
                 "time_step_seconds": self.cfg.synthetic_step_seconds,
                 "min_transition_distance": self.cfg.min_transition_distance,
@@ -979,6 +1047,12 @@ class PseudoTemporalBuilder:
     def build(self) -> None:
         if self.cfg.synthetic_step_seconds <= 0.0:
             raise ValueError("synthetic_step_seconds must be > 0.")
+        if self.cfg.seq_len <= 0:
+            raise ValueError("seq_len must be > 0.")
+        if self.cfg.window_stride <= 0:
+            raise ValueError("window_stride must be > 0.")
+        if self.cfg.interpolation_steps < 0:
+            raise ValueError("interpolation_steps must be >= 0.")
         if not 0.0 < self.cfg.val_ratio < 1.0:
             raise ValueError("val_ratio must be in (0, 1).")
 
@@ -1001,12 +1075,30 @@ class PseudoTemporalBuilder:
 
         all_samples: List[Dict[str, np.ndarray]] = []
         trajectory_counter = 0
+        target_total_len = self.effective_trajectory_total_len()
+        anchors_needed = self.num_anchor_points_for_trajectory(target_total_len)
+        expanded_len = self.expanded_length_from_anchors(anchors_needed)
+        est_windows_per_traj = self.estimate_windows_per_trajectory(expanded_len)
+
+        print(
+            "  Temporal config: "
+            f"seq_len={self.cfg.seq_len}, trajectory_total_len={target_total_len}, "
+            f"window_stride={self.cfg.window_stride}, interpolation_steps={self.cfg.interpolation_steps}",
+        )
+        print(
+            "  Derived trajectory shape: "
+            f"anchor_points={anchors_needed}, expanded_frames={expanded_len}, "
+            f"estimated_windows_per_trajectory={est_windows_per_traj}",
+        )
 
         print("[5/8] Generating trajectories and sequences...")
         for group_key, global_indices in group_to_indices.items():
-            interp = self.cfg.interpolation_steps
-            anchors_needed = math.ceil((self.cfg.seq_len + interp) / (interp + 1))
             generated_for_group = 0
+            endpoint_trajectory_limit = (
+                int(self.cfg.trajectories_per_group)
+                if int(self.cfg.trajectories_per_group) > 0
+                else None
+            )
 
             if self.cfg.sequence_generation_mode == "endpoint_path":
                 node_coords, node_global_indices, global_to_node = self.build_unique_coord_graph(
@@ -1019,8 +1111,18 @@ class PseudoTemporalBuilder:
                 random.shuffle(endpoint_global_indices)
 
                 for endpoint_global_idx in endpoint_global_indices:
+                    if (
+                        endpoint_trajectory_limit is not None
+                        and generated_for_group >= endpoint_trajectory_limit
+                    ):
+                        break
                     endpoint_node_idx = global_to_node[int(endpoint_global_idx)]
                     for _ in range(max(1, int(self.cfg.paths_per_endpoint))):
+                        if (
+                            endpoint_trajectory_limit is not None
+                            and generated_for_group >= endpoint_trajectory_limit
+                        ):
+                            break
                         local_anchor_traj = self.generate_path_ending_at(
                             endpoint_local_idx=endpoint_node_idx,
                             neighbor_indices=neighbor_indices,
@@ -1185,6 +1287,18 @@ def parse_args() -> Config:
 
     parser.add_argument("--seq-len", type=int, default=default_cfg.seq_len)
     parser.add_argument(
+        "--trajectory-total-len",
+        type=int,
+        default=default_cfg.trajectory_total_len,
+        help="Total frames per generated pseudo-trajectory before sliding windows. 0 means seq_len.",
+    )
+    parser.add_argument(
+        "--window-stride",
+        type=int,
+        default=default_cfg.window_stride,
+        help="Stride when cutting sliding windows from each generated trajectory.",
+    )
+    parser.add_argument(
         "--sequence-generation-mode",
         type=str,
         default=default_cfg.sequence_generation_mode,
@@ -1302,6 +1416,8 @@ def parse_args() -> Config:
         selected_waps_json=args.selected_waps_json,
         random_seed=args.random_seed,
         seq_len=args.seq_len,
+        trajectory_total_len=args.trajectory_total_len,
+        window_stride=args.window_stride,
         sequence_generation_mode=args.sequence_generation_mode,
         paths_per_endpoint=args.paths_per_endpoint,
         trajectories_per_group=args.trajectories_per_group,

@@ -1,0 +1,13 @@
+# Python 3.12 + CUDA 13.0 server stack
+# Use PyPI as primary index; use cu130 as extra index for torch CUDA wheel.
+# Source for CUDA wheel matrix: https://pytorch.org/get-started/previous-versions
+
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5
+matplotlib>=3.8
+tqdm>=4.67
+torch==2.10.0

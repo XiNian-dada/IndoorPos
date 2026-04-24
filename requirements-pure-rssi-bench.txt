@@ -1,0 +1,7 @@
+# CPU / sklearn benchmark dependencies
+numpy>=1.26
+matplotlib>=3.8
+scikit-learn>=1.3
+
+# Optional: only needed if you also run TrainRSSIOnlyHighAccuracyTorch.py
+# Install torch separately according to your CUDA environment.

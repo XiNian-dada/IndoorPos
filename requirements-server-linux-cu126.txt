@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# CUDA-enabled PyTorch for Linux servers (driver is backward-compatible with cu12.x wheels).
+# Works for training tiny models on NVIDIA GPUs.
+--index-url https://download.pytorch.org/whl/cu126
+torch==2.6.0

@@ -1,0 +1,1281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>article_pure_tcn_k20 深度可视化解析</title>
+
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)']],
+        displayMath: [['\\[', '\\]']],
+        processEscapes: true,
+        packages: { '[+]': ['ams'] }
+      },
+      svg: { fontCache: 'global' },
+      startup: { typeset: false }
+    };
+
+    (function loadMathJaxWithFallback() {
+      const urls = [
+        'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js',
+        'https://unpkg.com/mathjax@3/es5/tex-svg.js',
+        'https://cdn.bootcdn.net/ajax/libs/mathjax/3.2.2/es5/tex-svg.js'
+      ];
+      const head = document.head || document.getElementsByTagName('head')[0];
+
+      function tryLoad(idx) {
+        if (idx >= urls.length) return;
+        const s = document.createElement('script');
+        s.async = true;
+        s.src = urls[idx];
+        s.onload = function () {
+          const status = document.getElementById('mathStatus');
+          if (status) status.textContent = '公式脚本加载成功，正在渲染...';
+        };
+        s.onerror = function () {
+          tryLoad(idx + 1);
+        };
+        head.appendChild(s);
+      }
+
+      tryLoad(0);
+    })();
+  </script>
+
+  <style>
+    :root {
+      --bg: #f3f7fb;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #475569;
+      --line: #cbd5e1;
+      --teal: #0f766e;
+      --teal-soft: #ccfbf1;
+      --blue: #1d4ed8;
+      --blue-soft: #dbeafe;
+      --amber: #9a3412;
+      --amber-soft: #ffedd5;
+      --green: #166534;
+      --green-soft: #dcfce7;
+      --red: #991b1b;
+      --red-soft: #fee2e2;
+      --shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      line-height: 1.5;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(980px 380px at -8% -18%, #dbeafe 0%, transparent 60%),
+        radial-gradient(940px 360px at 108% -12%, #d1fae5 0%, transparent 62%),
+        var(--bg);
+    }
+
+    .container {
+      max-width: 1380px;
+      margin: 20px auto 56px;
+      padding: 0 14px;
+    }
+
+    .hero {
+      border-radius: 20px;
+      padding: 18px 20px 16px;
+      color: #fff;
+      background: linear-gradient(138deg, #0f766e 0%, #155e75 46%, #1d4ed8 100%);
+      box-shadow: 0 14px 34px rgba(15, 118, 110, 0.26);
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: 0.2px;
+      font-weight: 800;
+    }
+
+    .hero p { margin: 6px 0 0; opacity: 0.96; }
+    .hero .sub { margin-top: 8px; font-size: 13px; opacity: 0.9; }
+
+    .stats {
+      margin-top: 12px;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(7, minmax(108px, 1fr));
+    }
+
+    .stat {
+      min-height: 62px;
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.24);
+    }
+
+    .stat .k { font-size: 11px; opacity: 0.9; }
+    .stat .v { margin-top: 4px; font-size: 18px; font-weight: 800; }
+
+    .section {
+      margin-top: 14px;
+      border-radius: 14px;
+      padding: 14px;
+      background: var(--card);
+      border: 1px solid #dbe4ef;
+      box-shadow: var(--shadow);
+    }
+
+    .section h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0.2px;
+    }
+
+    .muted { color: var(--muted); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0;
+    }
+
+    .chip {
+      display: inline-block;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: #334155;
+      padding: 5px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    button {
+      border: 1px solid var(--teal);
+      border-radius: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 700;
+      background: var(--teal);
+      color: #fff;
+    }
+
+    button.secondary {
+      background: #fff;
+      color: var(--teal);
+    }
+
+    input[type="range"] { width: 170px; }
+
+    .grid-2 {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .grid-3 {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 1.25fr 1fr 1fr;
+    }
+
+    .flow-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr 1fr 1fr;
+      margin-top: 8px;
+    }
+
+    .flow-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+
+    .flow-card .title {
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 6px;
+      color: #0f172a;
+    }
+
+    .flow-card ul {
+      margin: 0;
+      padding-left: 16px;
+      color: #334155;
+      font-size: 13px;
+    }
+
+    svg.arch {
+      width: 100%;
+      height: 460px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .arch-node {
+      fill: #fff;
+      stroke: #94a3b8;
+      stroke-width: 1.6;
+      filter: drop-shadow(0 2px 2px rgba(15, 23, 42, 0.06));
+    }
+
+    .arch-node.active {
+      stroke: var(--teal);
+      stroke-width: 3;
+      fill: #f0fdfa;
+    }
+
+    .arch-label {
+      font-size: 12px;
+      fill: #0f172a;
+      font-weight: 800;
+    }
+
+    .arch-shape {
+      font-size: 11px;
+      fill: #475569;
+    }
+
+    .arch-arrow {
+      stroke: #64748b;
+      stroke-width: 1.8;
+      marker-end: url(#arrowhead);
+      fill: none;
+    }
+
+    canvas {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    #rssiCanvas { height: 310px; }
+    #rfCanvas { height: 250px; }
+    #trajCanvas { height: 320px; }
+
+    .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      max-height: 330px;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th, td {
+      text-align: left;
+      white-space: nowrap;
+      vertical-align: top;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 7px 8px;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #f8fafc;
+    }
+
+    .formula-box {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 10px 12px;
+    }
+
+    .formula-title {
+      font-size: 13px;
+      margin-bottom: 6px;
+      font-weight: 800;
+      color: #0f172a;
+    }
+
+    .fallback {
+      margin-top: 6px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 11px;
+      color: #64748b;
+      background: #f8fafc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .note {
+      border-radius: 11px;
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .note.warn {
+      border: 1px solid #fdba74;
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .note.ok {
+      border: 1px solid #86efac;
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .note.info {
+      border: 1px solid #93c5fd;
+      background: var(--blue-soft);
+      color: #1e3a8a;
+    }
+
+    .param-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      min-height: 82px;
+      padding: 9px 10px;
+      background: #fff;
+    }
+
+    .param-card .k { font-size: 12px; color: #475569; }
+    .param-card .v { margin-top: 3px; font-size: 18px; font-weight: 800; }
+
+    .pipeline {
+      margin-top: 6px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .pipeline .row {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr 36px 1fr 36px 1fr;
+      align-items: center;
+    }
+
+    .pipeline .box {
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 12px;
+      color: #334155;
+    }
+
+    .pipeline .arrow {
+      text-align: center;
+      color: #64748b;
+      font-size: 20px;
+      font-weight: 800;
+      user-select: none;
+    }
+
+    .mjx-container {
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 2px;
+    }
+
+    @media (max-width: 1120px) {
+      .stats { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+      .grid-2, .grid-3, .flow-grid { grid-template-columns: 1fr; }
+      .pipeline .row { grid-template-columns: 1fr; }
+      .pipeline .arrow { display: none; }
+      svg.arch { height: 560px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>article_pure_tcn_k20_th64_tc128_hh192_do0.08_post 深度可视化</h1>
+      <p>目标：将 AP 信号集合与短时运动历史联合编码，预测每一步 \(\Delta x,\Delta y\)，并通过递推得到连续轨迹。</p>
+      <p class="sub">对应实现：`TrainArticleTrajectoryModel.py`（Top-K Token + pure_tcn + Δ坐标回归 + grid 辅助分类）</p>
+      <div class="stats">
+        <div class="stat"><div class="k">mean</div><div class="v">1.274 m</div></div>
+        <div class="stat"><div class="k">median</div><div class="v">1.112 m</div></div>
+        <div class="stat"><div class="k">p90</div><div class="v">2.168 m</div></div>
+        <div class="stat"><div class="k">p95</div><div class="v">2.739 m</div></div>
+        <div class="stat"><div class="k">rmse</div><div class="v">1.493 m</div></div>
+        <div class="stat"><div class="k">grid cls_acc</div><div class="v">0.478</div></div>
+        <div class="stat"><div class="k">size</div><div class="v">1.32 MB</div></div>
+      </div>
+    </div>
+
+    <section class="section">
+      <h2>1) 先看全局：算法在做什么</h2>
+      <p class="muted">这个模型不是直接回归绝对坐标，而是先学“当前位置相对上一时刻的位移”，所以能更好利用轨迹连续性。</p>
+      <div class="pipeline">
+        <div class="row">
+          <div class="box"><strong>输入</strong><br/>RSSI: \([B,T,N_{AP}]\)<br/>Motion: \([B,T,7]\)</div>
+          <div class="arrow">→</div>
+          <div class="box"><strong>时序编码</strong><br/>Top-K token + Frame MLP + TCN</div>
+          <div class="arrow">→</div>
+          <div class="box"><strong>双头输出</strong><br/>\(\Delta x,\Delta y\) + grid logits</div>
+        </div>
+      </div>
+
+      <div class="flow-grid">
+        <div class="flow-card">
+          <div class="title">为什么用增量回归</div>
+          <ul>
+            <li>位移目标更平滑，学习难度低于全局坐标。</li>
+            <li>可自然加入速度上限约束与轨迹滤波。</li>
+            <li>对局部 RSSI 抖动更稳。</li>
+          </ul>
+        </div>
+        <div class="flow-card">
+          <div class="title">为什么用 Top-K token</div>
+          <ul>
+            <li>RSSI 输入本质是 AP 集合，不是图像。</li>
+            <li>token 保留 AP 身份与强度变化信息。</li>
+            <li>减少噪声 AP 干扰，降低计算量。</li>
+          </ul>
+        </div>
+        <div class="flow-card">
+          <div class="title">为什么要辅助分类头</div>
+          <ul>
+            <li>grid 头提供空间结构监督。</li>
+            <li>提升主干特征判别性。</li>
+            <li>最终评价仍以米级误差为主。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>2) 网络结构图（可播放逐层高亮）</h2>
+      <p class="muted">点击播放后可看到计算路径逐步高亮，便于在文档中解释每个模块的职责。</p>
+      <div class="controls">
+        <button id="btnPlayArch">播放</button>
+        <button id="btnStopArch" class="secondary">停止</button>
+        <span class="chip" id="archStageText">当前层：Input</span>
+      </div>
+
+      <svg class="arch" id="archSvg" viewBox="0 0 1260 460" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="8" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+        </defs>
+
+        <line class="arch-arrow" x1="195" y1="90" x2="300" y2="90"/>
+        <line class="arch-arrow" x1="445" y1="90" x2="550" y2="90"/>
+        <line class="arch-arrow" x1="695" y1="90" x2="800" y2="90"/>
+        <line class="arch-arrow" x1="945" y1="90" x2="1050" y2="90"/>
+        <line class="arch-arrow" x1="1135" y1="90" x2="1210" y2="90"/>
+
+        <line class="arch-arrow" x1="870" y1="170" x2="870" y2="250"/>
+        <line class="arch-arrow" x1="1035" y1="170" x2="1035" y2="250"/>
+
+        <g class="arch-step" data-step="Input">
+          <rect class="arch-node" x="20" y="40" rx="12" ry="12" width="175" height="108"/>
+          <text class="arch-label" x="34" y="66">Input Window</text>
+          <text class="arch-shape" x="34" y="88">RSSI: [B,T,N_AP]</text>
+          <text class="arch-shape" x="34" y="108">Motion: [B,T,7]</text>
+          <text class="arch-shape" x="34" y="128">T-step sequence</text>
+        </g>
+
+        <g class="arch-step" data-step="TopK">
+          <rect class="arch-node" x="300" y="40" rx="12" ry="12" width="145" height="108"/>
+          <text class="arch-label" x="315" y="66">Top-K Token</text>
+          <text class="arch-shape" x="315" y="88">K = 20</text>
+          <text class="arch-shape" x="315" y="108">[B,T,K,12]</text>
+          <text class="arch-shape" x="315" y="128">AP_emb + RSSI + Δ</text>
+        </g>
+
+        <g class="arch-step" data-step="FrameMLP">
+          <rect class="arch-node" x="550" y="40" rx="12" ry="12" width="145" height="108"/>
+          <text class="arch-label" x="565" y="66">Frame Encoder</text>
+          <text class="arch-shape" x="565" y="88">MLP 240→64→64</text>
+          <text class="arch-shape" x="565" y="108">z_t: [B,T,64]</text>
+          <text class="arch-shape" x="565" y="128">frame feature</text>
+        </g>
+
+        <g class="arch-step" data-step="ConcatProj">
+          <rect class="arch-node" x="800" y="40" rx="12" ry="12" width="145" height="108"/>
+          <text class="arch-label" x="813" y="66">Concat + Proj</text>
+          <text class="arch-shape" x="813" y="88">[z_t,m_t] = 71</text>
+          <text class="arch-shape" x="813" y="108">Linear 71→128</text>
+          <text class="arch-shape" x="813" y="128">[B,T,128]</text>
+        </g>
+
+        <g class="arch-step" data-step="TCN">
+          <rect class="arch-node" x="1050" y="40" rx="12" ry="12" width="145" height="108"/>
+          <text class="arch-label" x="1065" y="66">TCN x2</text>
+          <text class="arch-shape" x="1065" y="88">dilation 1, 2</text>
+          <text class="arch-shape" x="1065" y="108">Res Conv1d</text>
+          <text class="arch-shape" x="1065" y="128">[B,T,128]</text>
+        </g>
+
+        <g class="arch-step" data-step="PoolingHead">
+          <rect class="arch-node" x="780" y="250" rx="12" ry="12" width="180" height="118"/>
+          <text class="arch-label" x="796" y="276">Temporal Pool + Trunk</text>
+          <text class="arch-shape" x="796" y="298">last/mean/max concat</text>
+          <text class="arch-shape" x="796" y="318">384 → 192</text>
+          <text class="arch-shape" x="796" y="338">dropout=0.08</text>
+        </g>
+
+        <g class="arch-step" data-step="Heads">
+          <rect class="arch-node" x="980" y="250" rx="12" ry="12" width="250" height="168"/>
+          <text class="arch-label" x="996" y="276">Dual Heads + Objective</text>
+          <text class="arch-shape" x="996" y="300">Reg: Δx, Δy</text>
+          <text class="arch-shape" x="996" y="320">Cls: grid logits(G)</text>
+          <text class="arch-shape" x="996" y="340">L = SmoothL1 + λ·CE</text>
+          <text class="arch-shape" x="996" y="360">p_t = p_{t-1} + Δp_t</text>
+          <text class="arch-shape" x="996" y="380">optional: SpeedCap + Kalman</text>
+          <text class="arch-shape" x="996" y="400">output: final trajectory</text>
+        </g>
+      </svg>
+    </section>
+
+    <section class="section">
+      <h2>3) 维度流与计算路径（可直接贴文档）</h2>
+      <p class="muted">下面这组“输入→输出形状”就是模型实现的主脉络，用在技术文档最直观。</p>
+      <div class="table-wrap" style="max-height:unset;">
+        <table>
+          <thead>
+            <tr>
+              <th>阶段</th>
+              <th>输入</th>
+              <th>输出</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Raw Inputs</td><td>RSSI [B,T,N_AP], Motion [B,T,7]</td><td>同左</td><td>每个窗口包含 T 帧历史</td></tr>
+            <tr><td>Top-K Extract</td><td>RSSI [B,T,N_AP]</td><td>Token [B,T,K,12]</td><td>保留最强 K 个 AP 并构造 token 特征</td></tr>
+            <tr><td>Frame MLP</td><td>[B,T,K*12]=[B,T,240]</td><td>z [B,T,64]</td><td>帧内 AP 集合编码</td></tr>
+            <tr><td>Concat + Proj</td><td>[z,m]=[B,T,71]</td><td>h0 [B,T,128]</td><td>统一通道维度进入 TCN</td></tr>
+            <tr><td>TCN Blocks</td><td>h0 [B,T,128]</td><td>h [B,T,128]</td><td>dilation(1,2) 残差卷积建模时序依赖</td></tr>
+            <tr><td>Temporal Pool</td><td>h [B,T,128]</td><td>u [B,384]</td><td>拼接 last/mean/max 三种统计</td></tr>
+            <tr><td>Trunk</td><td>u [B,384]</td><td>f [B,192]</td><td>共享表征供双头使用</td></tr>
+            <tr><td>Reg Head</td><td>f [B,192]</td><td>Δp [B,2]</td><td>预测 \(\Delta x,\Delta y\)</td></tr>
+            <tr><td>Grid Head</td><td>f [B,192]</td><td>logits [B,G]</td><td>辅助分类监督空间结构</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>4) Top-K AP token 构造可视化（交互）</h2>
+      <p class="muted">柱状图是当前帧 RSSI，绿色为 Top-K AP。右表展示每个 token 的关键特征值。</p>
+      <div class="controls">
+        <button id="btnResample">重新采样 AP 信号</button>
+        <span class="chip">AP 总数: <span id="apCountText">128</span></span>
+        <span class="chip">K: <span id="kText">20</span></span>
+        <label class="chip">K
+          <input id="kSlider" type="range" min="6" max="32" value="20" />
+        </label>
+      </div>
+      <div class="grid-2">
+        <canvas id="rssiCanvas" width="640" height="310"></canvas>
+        <div class="table-wrap">
+          <table id="tokenTable">
+            <thead>
+              <tr>
+                <th>rank</th>
+                <th>AP_ID</th>
+                <th>RSSI(t)</th>
+                <th>RSSI(t-1)</th>
+                <th>ΔRSSI</th>
+                <th>is_new</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>5) TCN 感受野可视化（为什么它能用历史信息）</h2>
+      <p class="muted">蓝点是当前预测时刻，绿点是该时刻可访问的历史帧。你可以改窗口长度 T 观察感受野变化。</p>
+      <div class="controls">
+        <label class="chip">序列长度 T
+          <input id="tSlider" type="range" min="5" max="20" value="10" />
+        </label>
+        <span class="chip">T = <span id="tText">10</span></span>
+      </div>
+      <canvas id="rfCanvas" width="1260" height="250"></canvas>
+      <div class="note info">模型用 2 个 TCN block，每个 block 含 2 层 kernel=3 卷积，dilation 为 1 和 2，可在低成本下扩展有效时域。</div>
+    </section>
+
+    <section class="section">
+      <h2>6) 公式区（MathJax 渲染 + 纯文本兜底）</h2>
+      <p class="muted" id="mathStatus">正在检测公式渲染状态...</p>
+      <div class="grid-2">
+        <div class="formula-box">
+          <div class="formula-title">(1) Top-K token 构造</div>
+          \[
+            \mathbf{token}_{i,t} =
+            \left[\mathrm{Emb}(AP_{i,t}),\; r_{i,t},\; \left(r_{i,t}-r_{i,t-1}\right),\; \mathrm{rank}_{i,t},\; \mathrm{is\_new}_{i,t}\right]
+          \]
+          <div class="fallback">token_{i,t} = [Emb(AP_{i,t}), r_{i,t}, r_{i,t}-r_{i,t-1}, rank_{i,t}, is_new_{i,t}]</div>
+        </div>
+
+        <div class="formula-box">
+          <div class="formula-title">(2) 帧编码 + 时序建模</div>
+          \[
+            \mathbf{z}_t = f_{frame}(\mathbf{token}_{1:K,t}),\quad
+            \mathbf{h}_{1:T} = \mathrm{TCN}\left([\mathbf{z}_{1:T},\mathbf{m}_{1:T}]\right)
+          \]
+          <div class="fallback">z_t = FrameEncoder(tokens_t);  h_1:T = TCN([z_1:T, m_1:T])</div>
+        </div>
+
+        <div class="formula-box">
+          <div class="formula-title">(3) 双头输出</div>
+          \[
+            \Delta\hat{\mathbf{p}}_t = f_{reg}(\mathbf{h}_t),\qquad
+            \hat{\mathbf{g}}_t = f_{cls}(\mathbf{h}_t)
+          \]
+          <div class="fallback">delta_pred = Head_reg(h_t);  grid_logits = Head_cls(h_t)</div>
+        </div>
+
+        <div class="formula-box">
+          <div class="formula-title">(4) 训练损失</div>
+          \[
+            \mathcal{L} =
+            \underbrace{\mathrm{SmoothL1}(\Delta\hat{\mathbf{p}}_t,\Delta\mathbf{p}_t)}_{\text{主任务：位移回归}}
+            + \lambda\underbrace{\mathrm{CE}(\hat{\mathbf{g}}_t,\mathbf{g}_t)}_{\text{辅助任务：grid 分类}}
+          \]
+          <div class="fallback">L = SmoothL1(delta_pred, delta_gt) + lambda * CE(grid_logits, grid_gt)</div>
+        </div>
+
+        <div class="formula-box">
+          <div class="formula-title">(5) 推理递推</div>
+          \[
+            \hat{\mathbf{p}}_t = \hat{\mathbf{p}}_{t-1} + \Delta\hat{\mathbf{p}}_t
+          \]
+          <div class="fallback">p_t = p_{t-1} + delta_t</div>
+        </div>
+
+        <div class="formula-box">
+          <div class="formula-title">(6) 可选后处理</div>
+          \[
+            \hat{\mathbf{p}}^{post}_{1:T} =
+            \mathrm{Kalman}\big(\mathrm{SpeedCap}(\hat{\mathbf{p}}_{1:T})\big)
+          \]
+          <div class="fallback">p_post = Kalman(SpeedCap(p_raw))</div>
+        </div>
+      </div>
+      <div class="note warn">若离线环境无法访问 CDN，MathJax 可能加载失败；页面仍保留 fallback 文本公式，不影响阅读。</div>
+    </section>
+
+    <section class="section">
+      <h2>7) 参数量与资源消耗拆解（交互）</h2>
+      <p class="muted">可调 grid 类别数 \(G\) 来观察参数占比变化，便于写部署预算。</p>
+      <div class="controls">
+        <span class="chip">N_AP = 128</span>
+        <span class="chip">K = 20</span>
+        <span class="chip">token_dim = 12</span>
+        <span class="chip">th = 64</span>
+        <span class="chip">tc = 128</span>
+        <span class="chip">hh = 192</span>
+        <label class="chip">grid 类别 G
+          <input id="gSlider" type="range" min="64" max="320" step="4" value="204" />
+        </label>
+        <span class="chip">G = <span id="gText">204</span></span>
+      </div>
+
+      <div class="grid-3" id="paramCards"></div>
+
+      <div class="table-wrap" style="margin-top:10px; max-height:unset;">
+        <table id="paramTable">
+          <thead>
+            <tr>
+              <th>模块</th>
+              <th>输入 → 输出</th>
+              <th>参数量</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>8) 训练/推理流程图（文档友好）</h2>
+      <div class="flow-grid">
+        <div class="flow-card">
+          <div class="title">训练阶段</div>
+          <ul>
+            <li>滑窗构造序列样本 \([t-T+1,t]\)。</li>
+            <li>前向得到 \(\Delta\hat{p}_t\) 与 \(\hat{g}_t\)。</li>
+            <li>联合损失反传更新参数。</li>
+            <li>按验证集 mean/rmse 选最优 checkpoint。</li>
+          </ul>
+        </div>
+        <div class="flow-card">
+          <div class="title">推理阶段</div>
+          <ul>
+            <li>实时采样 RSSI + motion。</li>
+            <li>构造 Top-K token 序列并前向。</li>
+            <li>输出 \(\Delta\hat{p}_t\) 后递推位置。</li>
+            <li>可选做速度约束与卡尔曼平滑。</li>
+          </ul>
+        </div>
+        <div class="flow-card">
+          <div class="title">指标解释</div>
+          <ul>
+            <li>mean/median/p90/p95/rmse 衡量几何误差。</li>
+            <li>cls_acc 仅反映 grid 辅助头分类能力。</li>
+            <li>尾误差小而 cls_acc 低并不矛盾。</li>
+            <li>定位项目优先看米级误差指标。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>9) 轨迹演示：Raw 累积 vs Post 处理（交互）</h2>
+      <p class="muted">黑色=真值，红色=仅增量积分，绿色=速度约束+Kalman。调噪声看三条轨迹的差异。</p>
+      <div class="controls">
+        <button id="btnRegenTraj">重新生成</button>
+        <label class="chip">噪声
+          <input id="noiseSlider" type="range" min="0" max="100" value="35" />
+        </label>
+        <span class="chip">noise = <span id="noiseText">0.35</span></span>
+      </div>
+      <canvas id="trajCanvas" width="1260" height="320"></canvas>
+      <div class="note ok">你这份结果里 article_raw 与 article_post 数值一致，说明当前数据设置下主干模型已足够稳，后处理收益较小。</div>
+    </section>
+
+    <section class="section">
+      <h2>10) 可直接复制到文档的结论</h2>
+      <ol>
+        <li>该模型核心思想是“集合化 RSSI 编码 + 轻量 TCN 时序建模 + 位移递推定位”。</li>
+        <li>相对直接回归绝对坐标，位移建模更符合连续运动规律，误差更稳定。</li>
+        <li>grid 分类头是辅助监督，不作为最终定位输出，因此 cls_acc 可低于几何精度表现。</li>
+        <li>在你当前测试集上，该配置达到 mean=1.274m、rmse=1.493m，属于明显优于其他基线的方案。</li>
+      </ol>
+    </section>
+  </div>
+
+  <script>
+    // -------- MathJax status --------
+    const mathStatus = document.getElementById('mathStatus');
+
+    async function tryTypesetMath(maxTry = 16) {
+      for (let i = 0; i < maxTry; i++) {
+        if (window.MathJax && window.MathJax.typesetPromise) {
+          try {
+            await window.MathJax.typesetPromise();
+            const hasMath = !!document.querySelector('mjx-container');
+            mathStatus.textContent = hasMath
+              ? '公式渲染正常（MathJax）。'
+              : '未检测到公式容器，显示 fallback 文本。';
+            return;
+          } catch (_err) {
+            mathStatus.textContent = 'MathJax 加载失败，已显示 fallback 文本公式。';
+            return;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      mathStatus.textContent = '未检测到 MathJax（可能离线），已显示 fallback 文本公式。';
+    }
+
+    tryTypesetMath();
+
+    // -------- Section 2: architecture highlight --------
+    const archSteps = ['Input', 'TopK', 'FrameMLP', 'ConcatProj', 'TCN', 'PoolingHead', 'Heads'];
+    const archNodes = Array.from(document.querySelectorAll('.arch-step'));
+    const archStageText = document.getElementById('archStageText');
+    let archTimer = null;
+    let archIdx = 0;
+
+    function renderArchStep(i) {
+      const cur = archSteps[i % archSteps.length];
+      archNodes.forEach((node) => {
+        const rect = node.querySelector('.arch-node');
+        rect.classList.toggle('active', node.dataset.step === cur);
+      });
+      archStageText.textContent = '当前层：' + cur;
+    }
+
+    renderArchStep(0);
+
+    document.getElementById('btnPlayArch').addEventListener('click', () => {
+      if (archTimer) return;
+      archTimer = setInterval(() => {
+        archIdx = (archIdx + 1) % archSteps.length;
+        renderArchStep(archIdx);
+      }, 850);
+    });
+
+    document.getElementById('btnStopArch').addEventListener('click', () => {
+      if (archTimer) clearInterval(archTimer);
+      archTimer = null;
+    });
+
+    // -------- Section 4: Top-K AP token visual --------
+    const AP_COUNT = 128;
+    const apCountText = document.getElementById('apCountText');
+    apCountText.textContent = String(AP_COUNT);
+
+    const rssiCanvas = document.getElementById('rssiCanvas');
+    const rctx = rssiCanvas.getContext('2d');
+    const kSlider = document.getElementById('kSlider');
+    const kText = document.getElementById('kText');
+    const tokenBody = document.querySelector('#tokenTable tbody');
+
+    let rssiPrev = [];
+    let rssiCurr = [];
+
+    function randn() {
+      let u = 0;
+      let v = 0;
+      while (u === 0) u = Math.random();
+      while (v === 0) v = Math.random();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+
+    function sampleRSSI() {
+      rssiPrev = [];
+      rssiCurr = [];
+      for (let i = 0; i < AP_COUNT; i++) {
+        const base = -78 + 16 * Math.sin(i * 0.15) + 10 * randn();
+        const prev = Math.max(-95, Math.min(-30, base));
+        const curr = Math.max(-95, Math.min(-30, prev + 5 * randn()));
+        rssiPrev.push(prev);
+        rssiCurr.push(curr);
+      }
+    }
+
+    function drawRSSI() {
+      const K = parseInt(kSlider.value, 10);
+      kText.textContent = String(K);
+
+      const W = rssiCanvas.width;
+      const H = rssiCanvas.height;
+
+      rctx.clearRect(0, 0, W, H);
+      rctx.fillStyle = '#ffffff';
+      rctx.fillRect(0, 0, W, H);
+
+      rctx.strokeStyle = '#e2e8f0';
+      rctx.lineWidth = 1;
+      for (let y = 20; y <= H - 30; y += 35) {
+        rctx.beginPath();
+        rctx.moveTo(30, y);
+        rctx.lineTo(W - 8, y);
+        rctx.stroke();
+      }
+
+      const idx = Array.from({ length: AP_COUNT }, (_, i) => i);
+      idx.sort((a, b) => rssiCurr[b] - rssiCurr[a]);
+      const topSet = new Set(idx.slice(0, K));
+
+      const minR = -95;
+      const maxR = -30;
+      const barW = (W - 40) / AP_COUNT;
+
+      for (let i = 0; i < AP_COUNT; i++) {
+        const x = 30 + i * barW;
+        const norm = (rssiCurr[i] - minR) / (maxR - minR);
+        const h = Math.max(2, norm * (H - 60));
+        const y = H - 25 - h;
+
+        rctx.fillStyle = topSet.has(i) ? '#0f766e' : '#94a3b8';
+        rctx.fillRect(x, y, Math.max(1, barW - 1), h);
+      }
+
+      rctx.fillStyle = '#0f172a';
+      rctx.font = '12px sans-serif';
+      rctx.fillText('Current RSSI over 128 APs (Top-K highlighted)', 12, 14);
+      rctx.fillStyle = '#0f766e';
+      rctx.fillText('Top-K', 12, 30);
+      rctx.fillStyle = '#64748b';
+      rctx.fillText('Others', 64, 30);
+
+      tokenBody.innerHTML = '';
+      idx.slice(0, K).forEach((ap, rank) => {
+        const d = rssiCurr[ap] - rssiPrev[ap];
+        const isNew = (rssiPrev[ap] < -90 && rssiCurr[ap] > -85) ? 1 : 0;
+        const row = [
+          rank + 1,
+          `WAP${String(ap + 1).padStart(3, '0')}`,
+          rssiCurr[ap].toFixed(1),
+          rssiPrev[ap].toFixed(1),
+          d.toFixed(1),
+          isNew
+        ];
+
+        const tr = document.createElement('tr');
+        row.forEach((val, ci) => {
+          const td = document.createElement('td');
+          td.textContent = String(val);
+          if (ci === 4) {
+            td.style.color = d >= 0 ? '#166534' : '#991b1b';
+            td.style.fontWeight = '700';
+          }
+          tr.appendChild(td);
+        });
+        tokenBody.appendChild(tr);
+      });
+    }
+
+    document.getElementById('btnResample').addEventListener('click', () => {
+      sampleRSSI();
+      drawRSSI();
+    });
+
+    kSlider.addEventListener('input', drawRSSI);
+
+    sampleRSSI();
+    drawRSSI();
+
+    // -------- Section 5: receptive field visual --------
+    const rfCanvas = document.getElementById('rfCanvas');
+    const rfctx = rfCanvas.getContext('2d');
+    const tSlider = document.getElementById('tSlider');
+    const tText = document.getElementById('tText');
+
+    function receptiveSet(T) {
+      const target = T - 1;
+      let current = new Set([target]);
+      const dilations = [1, 1, 2, 2];
+
+      dilations.forEach((d) => {
+        const next = new Set();
+        current.forEach((i) => {
+          [i - d, i, i + d].forEach((j) => {
+            if (j >= 0 && j < T) next.add(j);
+          });
+        });
+        current = next;
+      });
+
+      return { target, set: current };
+    }
+
+    function drawRF() {
+      const T = parseInt(tSlider.value, 10);
+      tText.textContent = String(T);
+      const { target, set } = receptiveSet(T);
+
+      const W = rfCanvas.width;
+      const H = rfCanvas.height;
+
+      rfctx.clearRect(0, 0, W, H);
+      rfctx.fillStyle = '#ffffff';
+      rfctx.fillRect(0, 0, W, H);
+
+      const left = 40;
+      const right = W - 30;
+      const y = H / 2;
+      const step = (right - left) / Math.max(1, T - 1);
+
+      rfctx.strokeStyle = '#cbd5e1';
+      rfctx.lineWidth = 1.6;
+      rfctx.beginPath();
+      rfctx.moveTo(left, y);
+      rfctx.lineTo(right, y);
+      rfctx.stroke();
+
+      for (let t = 0; t < T; t++) {
+        const x = left + t * step;
+        const inRF = set.has(t);
+        const isTarget = t === target;
+
+        rfctx.beginPath();
+        rfctx.arc(x, y, isTarget ? 10 : 7, 0, Math.PI * 2);
+        rfctx.fillStyle = isTarget ? '#1d4ed8' : (inRF ? '#0f766e' : '#94a3b8');
+        rfctx.fill();
+
+        rfctx.fillStyle = '#0f172a';
+        rfctx.font = '11px sans-serif';
+        rfctx.fillText(String(t), x - 3, y + 23);
+      }
+
+      rfctx.fillStyle = '#0f172a';
+      rfctx.font = '12px sans-serif';
+      rfctx.fillText(`TCN receptive field for output at t=${target}`, 12, 18);
+      rfctx.fillStyle = '#0f766e';
+      rfctx.fillText(`reachable timesteps: ${Array.from(set).join(', ')}`, 12, H - 12);
+    }
+
+    tSlider.addEventListener('input', drawRF);
+    drawRF();
+
+    // -------- Section 7: params breakdown --------
+    const gSlider = document.getElementById('gSlider');
+    const gText = document.getElementById('gText');
+    const paramCards = document.getElementById('paramCards');
+    const paramTableBody = document.querySelector('#paramTable tbody');
+
+    function fmt(n) {
+      return n.toLocaleString('en-US');
+    }
+
+    function updateParams() {
+      const N_AP = 128;
+      const K = 20;
+      const tokenDim = 12;
+      const th = 64;
+      const tc = 128;
+      const hh = 192;
+      const G = parseInt(gSlider.value, 10);
+      gText.textContent = String(G);
+
+      const emb = N_AP * 8;
+      const frame1 = (K * tokenDim) * th + th;
+      const frame2 = th * th + th;
+      const inputProj = (th + 7) * tc + tc;
+
+      const conv = tc * tc * 3 + tc;
+      const bn = tc * 2;
+      const tcnBlock = conv + conv + bn;
+      const tcnAll = tcnBlock * 2;
+
+      const trunk = (tc * 3) * hh + hh;
+      const reg = hh * 2 + 2;
+      const cls = hh * G + G;
+
+      const total = emb + frame1 + frame2 + inputProj + tcnAll + trunk + reg + cls;
+      const mb = total * 4 / (1024 * 1024);
+
+      const rows = [
+        ['AP Embedding', '[B,T,K]→[B,T,K,8]', emb, 'AP ID 到可学习向量'],
+        ['Frame MLP-1', '[B,T,240]→[B,T,64]', frame1, 'token 展平后第一层'],
+        ['Frame MLP-2', '[B,T,64]→[B,T,64]', frame2, '帧内非线性编码'],
+        ['Input Projection', '[B,T,71]→[B,T,128]', inputProj, '融合 motion 并通道对齐'],
+        ['TCN Block #1', '[B,T,128]→[B,T,128]', tcnBlock, 'dilation=1 残差卷积'],
+        ['TCN Block #2', '[B,T,128]→[B,T,128]', tcnBlock, 'dilation=2 残差卷积'],
+        ['Trunk', '[B,384]→[B,192]', trunk, 'last/mean/max 融合后共享层'],
+        ['Reg Head', '[B,192]→[B,2]', reg, '位移回归头'],
+        ['Grid Head', `[B,192]→[B,${G}]`, cls, '辅助分类头']
+      ];
+
+      paramTableBody.innerHTML = '';
+      rows.forEach((r) => {
+        const tr = document.createElement('tr');
+        r.forEach((c, i) => {
+          const td = document.createElement('td');
+          td.textContent = i === 2 ? fmt(c) : String(c);
+          tr.appendChild(td);
+        });
+        paramTableBody.appendChild(tr);
+      });
+
+      paramCards.innerHTML = `
+        <div class="param-card"><div class="k">总参数量（估算）</div><div class="v">${fmt(total)}</div></div>
+        <div class="param-card"><div class="k">float32 体积（估算）</div><div class="v">${mb.toFixed(2)} MB</div></div>
+        <div class="param-card"><div class="k">与实测 1.32MB 的关系</div><div class="v" style="font-size:14px;line-height:1.3;">实测体积受 G、保存格式、元数据影响，数量级一致。</div></div>
+      `;
+    }
+
+    gSlider.addEventListener('input', updateParams);
+    updateParams();
+
+    // -------- Section 9: trajectory demo --------
+    const trajCanvas = document.getElementById('trajCanvas');
+    const tctx = trajCanvas.getContext('2d');
+    const noiseSlider = document.getElementById('noiseSlider');
+    const noiseText = document.getElementById('noiseText');
+
+    function speedCap(points, maxStep = 1.65) {
+      const out = [points[0]];
+      for (let i = 1; i < points.length; i++) {
+        const prev = out[i - 1];
+        const cur = points[i];
+        let dx = cur.x - prev.x;
+        let dy = cur.y - prev.y;
+        const d = Math.hypot(dx, dy) || 1e-6;
+        if (d > maxStep) {
+          const s = maxStep / d;
+          dx *= s;
+          dy *= s;
+        }
+        out.push({ x: prev.x + dx, y: prev.y + dy });
+      }
+      return out;
+    }
+
+    function kalman2D(points, q = 0.1, r = 0.25) {
+      let x = [points[0].x, points[0].y, 0, 0];
+      let P = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+      const H = [[1,0,0,0],[0,1,0,0]];
+      const R = [[r,0],[0,r]];
+      const I = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+
+      const out = [{ x: x[0], y: x[1] }];
+
+      function mm(A, B) {
+        const n = A.length;
+        const m = B[0].length;
+        const k = B.length;
+        const C = Array.from({ length: n }, () => Array(m).fill(0));
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < m; j++) {
+            for (let t = 0; t < k; t++) C[i][j] += A[i][t] * B[t][j];
+          }
+        }
+        return C;
+      }
+
+      function mt(A) {
+        return A[0].map((_, j) => A.map((row) => row[j]));
+      }
+
+      function ma(A, B) {
+        return A.map((row, i) => row.map((v, j) => v + B[i][j]));
+      }
+
+      function ms(A, B) {
+        return A.map((row, i) => row.map((v, j) => v - B[i][j]));
+      }
+
+      function inv2(M) {
+        const det = M[0][0] * M[1][1] - M[0][1] * M[1][0] || 1e-9;
+        return [[ M[1][1] / det, -M[0][1] / det], [ -M[1][0] / det, M[0][0] / det ]];
+      }
+
+      for (let i = 1; i < points.length; i++) {
+        const F = [[1,0,1,0],[0,1,0,1],[0,0,1,0],[0,0,0,1]];
+        const Q = [[q,0,0,0],[0,q,0,0],[0,0,q,0],[0,0,0,q]];
+
+        x = [x[0] + x[2], x[1] + x[3], x[2], x[3]];
+        P = ma(mm(mm(F, P), mt(F)), Q);
+
+        const z = [points[i].x, points[i].y];
+        const y = [z[0] - x[0], z[1] - x[1]];
+        const S = ma(mm(mm(H, P), mt(H)), R);
+        const K = mm(mm(P, mt(H)), inv2(S));
+
+        const ky = [
+          K[0][0] * y[0] + K[0][1] * y[1],
+          K[1][0] * y[0] + K[1][1] * y[1],
+          K[2][0] * y[0] + K[2][1] * y[1],
+          K[3][0] * y[0] + K[3][1] * y[1]
+        ];
+
+        x = [x[0] + ky[0], x[1] + ky[1], x[2] + ky[2], x[3] + ky[3]];
+        P = mm(ms(I, mm(K, H)), P);
+
+        out.push({ x: x[0], y: x[1] });
+      }
+
+      return out;
+    }
+
+    function drawPath(ctx, pts, sx, sy, ox, oy, color, width) {
+      if (!pts.length) return;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(ox + pts[0].x * sx, oy - pts[0].y * sy);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(ox + pts[i].x * sx, oy - pts[i].y * sy);
+      }
+      ctx.stroke();
+    }
+
+    function renderTraj() {
+      const noise = parseInt(noiseSlider.value, 10) / 100;
+      noiseText.textContent = noise.toFixed(2);
+
+      const N = 60;
+      const truePts = [{ x: 0, y: 0 }];
+      const rawPts = [{ x: 0, y: 0 }];
+
+      for (let i = 1; i < N; i++) {
+        const ang = i * 0.19 + 0.5 * Math.sin(i * 0.11);
+        const step = 1.0 + 0.35 * Math.sin(i * 0.23);
+
+        const dx = step * Math.cos(ang);
+        const dy = step * Math.sin(ang);
+
+        const tp = truePts[i - 1];
+        truePts.push({ x: tp.x + dx, y: tp.y + dy });
+
+        const ndx = dx + noise * randn();
+        const ndy = dy + noise * randn();
+        const rp = rawPts[i - 1];
+        rawPts.push({ x: rp.x + ndx, y: rp.y + ndy });
+      }
+
+      const postPts = kalman2D(speedCap(rawPts, 1.7), 0.1, 0.25);
+
+      const all = truePts.concat(rawPts, postPts);
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+
+      all.forEach((p) => {
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+      });
+
+      const pad = 2.2;
+      minX -= pad;
+      maxX += pad;
+      minY -= pad;
+      maxY += pad;
+
+      const W = trajCanvas.width;
+      const H = trajCanvas.height;
+      tctx.clearRect(0, 0, W, H);
+      tctx.fillStyle = '#ffffff';
+      tctx.fillRect(0, 0, W, H);
+
+      tctx.strokeStyle = '#e2e8f0';
+      tctx.lineWidth = 1;
+      for (let x = 20; x < W; x += 40) {
+        tctx.beginPath();
+        tctx.moveTo(x, 8);
+        tctx.lineTo(x, H - 8);
+        tctx.stroke();
+      }
+      for (let y = 8; y < H; y += 40) {
+        tctx.beginPath();
+        tctx.moveTo(8, y);
+        tctx.lineTo(W - 8, y);
+        tctx.stroke();
+      }
+
+      const sx = (W - 70) / (maxX - minX || 1);
+      const sy = (H - 50) / (maxY - minY || 1);
+      const s = Math.min(sx, sy);
+      const ox = 35 - minX * s;
+      const oy = H - 25 + minY * s;
+
+      drawPath(tctx, truePts, s, s, ox, oy, '#111827', 2.2);
+      drawPath(tctx, rawPts, s, s, ox, oy, '#dc2626', 1.8);
+      drawPath(tctx, postPts, s, s, ox, oy, '#16a34a', 2.0);
+
+      tctx.font = '12px sans-serif';
+      tctx.fillStyle = '#111827';
+      tctx.fillText('True', 12, 18);
+      tctx.fillStyle = '#dc2626';
+      tctx.fillText('Raw', 50, 18);
+      tctx.fillStyle = '#16a34a';
+      tctx.fillText('Post', 84, 18);
+    }
+
+    document.getElementById('btnRegenTraj').addEventListener('click', renderTraj);
+    noiseSlider.addEventListener('input', renderTraj);
+    renderTraj();
+  </script>
+</body>
+</html>
